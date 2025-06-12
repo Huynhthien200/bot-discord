@@ -18,11 +18,11 @@ rpc_list = [
 ]
 rpc_index = 0
 
-# ==== Token & kênh Discord ====
-discord_token = os.getenv("DISCORD_TOKEN")  # Lấy từ biến môi trường
-channel_id = int(os.getenv("DISCORD_CHANNEL_ID", "123456789012345678"))  # Có thể thêm biến môi trường khác
+# ==== Token & Channel ID ====
+discord_token = os.getenv("DISCORD_TOKEN")
+channel_id = int(os.getenv("DISCORD_CHANNEL_ID", "123456789012345678"))
 
-# ==== Intents ====
+# ==== Intents & Bot ====
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -62,8 +62,8 @@ async def send_discord_message(msg):
     except Exception as e:
         print(f"❗️ Lỗi gửi tin nhắn: {e}")
 
-# ==== Theo dõi ====
-@tasks.loop(seconds=1)
+# ==== Theo dõi số dư mỗi 5 giây ====
+@tasks.loop(seconds=5)
 async def track_all_balances():
     for label, address in watched_accounts.items():
         current = get_balance(address)
@@ -84,6 +84,7 @@ async def track_all_balances():
             await send_discord_message(msg)
 
         balance_cache[address] = current
+        await asyncio.sleep(0.5)  # ✅ Tránh nghẽn
 
 # ==== Khi bot sẵn sàng ====
 @bot.event
@@ -91,7 +92,7 @@ async def on_ready():
     print(f"🤖 Bot đã đăng nhập là: {bot.user}")
     track_all_balances.start()
 
-# ==== Lệnh Discord ====
+# ==== Lệnh thủ công ====
 @bot.command()
 async def ping(ctx):
     await ctx.send("✅ Bot đang hoạt động!")
