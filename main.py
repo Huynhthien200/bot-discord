@@ -1,3 +1,4 @@
+import os
 import requests
 import discord
 import asyncio
@@ -18,8 +19,8 @@ rpc_list = [
 rpc_index = 0
 
 # ==== Token & kênh Discord ====
-discord_token = "MTM4MjYzMjYxNjgzMzg0NzMwNw.GLVrPv.QrtYx3ZfKwahcOcw1yo8Ym-_g1N2mWuMjRDXY0"  # Đặt token thật vào đây
-channel_id = 1382659133450227722           # Đặt ID kênh Discord vào đây
+discord_token = os.getenv("DISCORD_TOKEN")  # Lấy từ biến môi trường
+channel_id = int(os.getenv("DISCORD_CHANNEL_ID", "123456789012345678"))  # Có thể thêm biến môi trường khác
 
 # ==== Intents ====
 intents = discord.Intents.default()
