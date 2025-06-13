@@ -63,7 +63,7 @@ def load_keypair(raw: str) -> SuiKeyPair:
 # ────── client Sui ──────
 cfg    = SuiConfig.user_config(rpc_url=RPCS[RPC_IDX], prv_keys=[SUI_KEY_STRING])
 client = SyncClient(cfg)
-SENDER_ADDR = cfg.active_address.lower()
+SENDER_ADDR = str(cfg.active_address).lower()
 
 # ────── Discord ──────
 intents = discord.Intents.default()
