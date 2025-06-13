@@ -1,7 +1,4 @@
 discord.py
 requests
 flask
-sui         # package chính thức trên PyPI
-numpy
-scipy
-pandas
+sui
