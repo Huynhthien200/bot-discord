@@ -2,6 +2,21 @@ services:
   - type: web
     name: sui-discord-bot
     runtime: python
-    pythonVersion: 3.11        # ← ép Render dùng 3.11
+
+    # Thêm khối envVars, bỏ dòng pythonVersion gây lỗi
+    envVars:
+      - key: PYTHON_VERSION   # ép Render dùng Python 3.11
+        value: 3.11.8
+
+      # các biến bot cần dùng
+      - key: DISCORD_TOKEN
+        sync: false           # điền trên UI cho an toàn
+      - key: DISCORD_CHANNEL_ID
+        sync: false
+      - key: SUI_PRIVATE_KEY
+        sync: false
+      - key: SUI_TARGET_ADDRESS
+        sync: false
+
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
