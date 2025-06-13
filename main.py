@@ -4,20 +4,7 @@
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
-# ---- universal lightweight stubs ---------------------------------
-import sys, types
 
-class _Dummy(types.ModuleType):
-    """Trả về chính nó cho mọi thuộc tính, để tránh ImportError."""
-    def __getattr__(self, name):
-        fullname = f"{self.__name__}.{name}"
-        dummy = _Dummy(fullname)
-        sys.modules[fullname] = dummy      # đăng ký sub-module
-        return dummy
-
-for _pkg in ("numpy", "pandas", "sklearn"):
-    sys.modules[_pkg] = _Dummy(_pkg)
-# ------------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
