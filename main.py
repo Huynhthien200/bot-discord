@@ -1,99 +1,79 @@
-# =========================================================
-#  Discord SUI Wallet Tracker  ─  Auto-Withdraw toàn bộ
-# =========================================================
-import importlib
-importlib.import_module("sitecustomize")
-# --- shim audioop cho Python 3.13 -------------------------
-import sys, types
-sys.modules['audioop'] = types.ModuleType('audioop')
-#-----------------------------------------------------------
+# main.py
+import os
+import asyncio
+import gc
+import psutil
 
-#----------------------------------------------------------------------------
-import os, requests, discord, asyncio
+import httpx
+from aiohttp import web
+import discord
 from discord.ext import commands, tasks
-from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
-from flask import Flask
-from threading import Thread
 
-# ---------- Ví cần theo dõi ----------
-watched_accounts = {
-    "Neuter":       "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
-    "Khiêm Nguyễn": "0xfb4dd4169b270d767501b142df7b289a3194e72cbadd1e3a2c30118693bde32c",
-    "Tấn Dũng":     "0x5ecb5948c561b62fb6fe14a6bf8fba89d33ba6df8bea571fd568772083993f68",
-}
+from pysui import SyncClient, SuiConfig                # :contentReference[oaicite:0]{index=0}
+from pysui.sui.sui_crypto import SuiKeyPair            # :contentReference[oaicite:1]{index=1}
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction  # :contentReference[oaicite:2]{index=2}
 
-# ---------- RPC danh sách ----------
-rpc_list  = [
-    "https://rpc-mainnet.suiscan.xyz/",
-    "https://sui-mainnet-endpoint.blockvision.org"
-]
-rpc_index = 0
-client    = SyncClient(rpc_list[0])            # sui-py (sync)
+# ─── Environment ───────────────────────────────────────────────────────────
+DISCORD_TOKEN      = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID         = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+SUI_KEY_B64        = os.getenv("SUI_PRIVATE_KEY")  # base64-encoded schema+key
+TARGET_ADDRESS     = os.getenv("SUI_TARGET_ADDRESS")
 
-# ---------- Token & Channel ----------
-discord_token = os.getenv("DISCORD_TOKEN")           # bắt buộc
-channel_id    = int(os.getenv("DISCORD_CHANNEL_ID")) # bắt buộc
+assert DISCORD_TOKEN and CHANNEL_ID and SUI_KEY_B64 and TARGET_ADDRESS, "Missing one of DISCORD_TOKEN, DISCORD_CHANNEL_ID, SUI_PRIVATE_KEY, SUI_TARGET_ADDRESS"
 
-# ---------- Auto-withdraw (ví nguồn = account.address) ----------
-SUI_KEY = os.getenv("SUI_PRIVATE_KEY")               # hex private key
-TARGET  = os.getenv("SUI_TARGET_ADDRESS")            # ví đích nhận SUI
-assert all([discord_token, channel_id, SUI_KEY, TARGET]), "Thiếu biến môi trường!"
+# ─── Build SUI client & keypair ─────────────────────────────────────────────
+# expects SUI_PRIVATE_KEY as the base64 keystring you get from SuiKeyPair.serialize()
+keypair = SuiKeyPair.from_b64(SUI_KEY_B64)
+cfg     = SuiConfig.default_config()
+client  = SyncClient(cfg)  # synchronous JSON-RPC client :contentReference[oaicite:3]{index=3}
 
-account = SuiAccount.from_private_key(SUI_KEY)
-
-# ---------- Discord bot ----------
+# ─── Discord bot setup ──────────────────────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
+
 balance_cache: dict[str, int] = {}
 
-# ---------- Hàm RPC balance ----------
-def get_balance(addr: str) -> int | None:
-    global rpc_index
-    try:
-        rpc_url = rpc_list[rpc_index % len(rpc_list)]
-        payload = {"jsonrpc":"2.0","id":1,"method":"suix_getBalance","params":[addr]}
-        r = requests.post(rpc_url, json=payload, timeout=10)
-        if r.status_code == 200:
-            j = r.json()
-            if "result" in j and "totalBalance" in j["result"]:
-                return int(j["result"]["totalBalance"])
-        rpc_index += 1         # nếu lỗi, chuyển RPC khác
-    except Exception as e:
-        print("RPC error:", e)
-        rpc_index += 1
-    return None
+http_client = httpx.AsyncClient(timeout=10.0)
 
-# ---------- Gửi toàn bộ SUI ----------
+async def get_balance(addr: str) -> int | None:
+    payload = {
+        "jsonrpc": "2.0", "id": 1,
+        "method": "suix_getBalance",
+        "params": [addr]
+    }
+    try:
+        r = await http_client.post(cfg.rpc_url, json=payload)
+        data = r.json()
+        return int(data["result"]["totalBalance"])
+    except Exception:
+        return None
+
 def send_all_sui() -> str | None:
     try:
-        tx = (
-            sui_txn.TransferSui(recipient=TARGET)    # không truyền amount  → rút sạch
-            .build_and_sign(account)
-        )
-        res = client.execute(tx)
+        # build a synchronous transfer transaction
+        txer = SuiTransaction(client, initial_sender=keypair)  # use your keypair as sender
+        txer.transfer_sui(recipient=TARGET_ADDRESS)           # amount omitted = full balance
+        res = txer.execute()
         if res.effects.status.status == "success":
             return res.tx_digest
-        print("Tx failed:", res)
     except Exception as e:
         print("Send SUI error:", e)
     return None
 
 async def discord_send(msg: str):
     try:
-        ch = await bot.fetch_channel(channel_id)
+        ch = await bot.fetch_channel(CHANNEL_ID)
         await ch.send(msg)
     except Exception as e:
         print("Discord send error:", e)
 
-# ---------- Vòng quét 1 giây ----------
-@tasks.loop(seconds=1)
+@tasks.loop(seconds=10)  # polls every 10s
 async def tracker():
     for name, addr in watched_accounts.items():
-        cur = get_balance(addr)
+        cur = await get_balance(addr)
         if cur is None:
             continue
-
         prev = balance_cache.get(addr)
         if prev is not None and cur != prev:
             delta = (cur - prev) / 1e9
@@ -103,45 +83,48 @@ async def tracker():
                 f"{arrow} **{abs(delta):.4f} SUI**\n"
                 f"💼 {name}: {prev/1e9:.4f} → {cur/1e9:.4f} SUI"
             )
-
-            # Auto-withdraw nếu ví nguồn nhận thêm SUI
-            if delta > 0 and addr.lower() == account.address.lower():
+            # auto-withdraw if it's the monitored “source” account
+            if delta > 0 and addr.lower() == keypair.public_key.as_sui_address.lower():
                 tx = send_all_sui()
                 if tx:
-                    await discord_send(
-                        f"💸 **Đã rút toàn bộ SUI** về `{TARGET[:6]}…` \n"
-                        f"🔗 Tx: `{tx}`"
-                    )
-
+                    await discord_send(f"💸 **Đã rút toàn bộ SUI** về `{TARGET_ADDRESS[:6]}…`\n🔗 Tx: `{tx}`")
         balance_cache[addr] = cur
-        await asyncio.sleep(0.1)            # giảm tải RPC / gateway
 
 @bot.event
 async def on_ready():
-    print("🤖 Logged in as", bot.user)
+    bot.loop.create_task(start_webserver())
     tracker.start()
+    print("🤖 Logged in as", bot.user)
 
 @bot.command()
-async def ping(ctx): await ctx.send("✅ Bot OK!")
+async def ping(ctx):
+    await ctx.send("✅ Bot OK!")
 
 @bot.command()
 async def balance(ctx):
-    lines=[]
-    for n,a in watched_accounts.items():
-        b=get_balance(a)
-        if b: lines.append(f"💰 {n}: {b/1e9:.4f} SUI")
+    lines = []
+    for name, addr in watched_accounts.items():
+        b = await get_balance(addr)
+        if b is not None:
+            lines.append(f"💰 {name}: {b/1e9:.4f} SUI")
     await ctx.send("\n".join(lines) or "⚠️ RPC lỗi")
 
-# ---------- Flask keep-alive cho Render Web Service ----------
-app = Flask(__name__)
-@app.route('/')            # để UptimeRobot ping giữ “awake”
-def home(): return "✅ Discord SUI bot is alive!"
+# ─── keep-alive HTTP server ─────────────────────────────────────────────────
+async def handle_ping(req):
+    return web.Response(text="✅ Discord SUI bot is alive!")
 
-def run_web():
-    port = int(os.getenv("PORT", "8080"))
-    app.run(host="0.0.0.0", port=port)
+async def start_webserver():
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
+    await site.start()
 
-# ---------- Khởi chạy ----------
 if __name__ == "__main__":
-    Thread(target=run_web, daemon=True).start()
-    bot.run(discord_token)
+    watched_accounts = {
+        "Neuter":       "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
+        "Khiêm Nguyễn": "0xfb4dd4169b270d767501b142df7b289a3194e72cbadd1e3a2c30118693bde32c",
+        "Tấn Dũng":     "0x5ecb5948c561b62fb6fe14a6bf8fba89d33ba6df8bea571fd568772083993f68",
+    }
+    bot.run(DISCORD_TOKEN)
