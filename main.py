@@ -5,32 +5,44 @@
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
-
+#-----------------------------------------------------------
 print("[sitecustomize] LOADED from", __file__)
 import sys, types
-sys.modules['sui.ml'] = types.ModuleType('sui.ml')   # chặn import ml
 
-class Dummy(types.ModuleType):
+# ------------------ 1. Dummy helper ------------------
+class _Dummy(types.ModuleType):
     def __getattr__(self, name):
         full = f"{self.__name__}.{name}"
         if full in sys.modules:
             return sys.modules[full]
-        sub = Dummy(full)
-        sub.__path__ = []          # đánh dấu là package
+        sub = _Dummy(full)
+        sub.__path__ = []                # coi như package
         sys.modules[full] = sub
         return sub
     def __call__(self, *a, **kw): return self
     def __iter__(self): return iter(())
     def __len__(self): return 0
     def __bool__(self): return False
+    def __repr__(self): return f"<Dummy {self.__name__}>"
 
+# ------------------ 2. Stub numpy / pandas / sklearn ------------------
 for pkg in ("numpy", "pandas", "sklearn"):
-    root = Dummy(pkg)
+    root = _Dummy(pkg)
     root.__path__ = []
     sys.modules[pkg] = root
 
-print("[sitecustomize] Dummy ML stubs loaded ✔")
+# ------------------ 3. Stub sui.ml + các class ------------------
+ml_dummy = types.ModuleType("sui.ml")
+ml_dummy.__path__ = []                  # cho Python coi là package
 
+# Tạo class giả cho mỗi tên mà sui import
+for _name in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
+    setattr(ml_dummy, _name, _Dummy(f"sui.ml.{_name}"))
+
+sys.modules["sui.ml"] = ml_dummy        # đăng ký vào sys.modules
+
+print("[sitecustomize] ML stub ready, numpy/pandas/sklearn stub ready ✔")
+#----------------------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
