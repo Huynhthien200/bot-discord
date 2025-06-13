@@ -25,8 +25,8 @@ class _Dummy(types.ModuleType):
     def __bool__(self): return False
     def __repr__(self): return f"<Dummy {self.__name__}>"
 
-# ------------------ 2. Stub numpy / pandas / sklearn ------------------
-for pkg in ("numpy", "pandas", "sklearn"):
+# ------------------ 2. Stub numpy / pandas / sklearn / tensorflow ------------------
+for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):   # ⇦ thêm ở đây
     root = _Dummy(pkg)
     root.__path__ = []
     sys.modules[pkg] = root
