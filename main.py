@@ -7,43 +7,7 @@ importlib.import_module("sitecustomize")
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
 #-----------------------------------------------------------
-import sys, types
 
-class _Dummy(types.ModuleType):
-    def __getattr__(self, name):
-        full = f"{self.__name__}.{name}"
-        if full in sys.modules:                 # đã tạo trước
-            return sys.modules[full]
-        sub = _Dummy(full); sub.__path__ = []   # tạo sub-package
-        sys.modules[full] = sub
-        return sub
-    def __call__(self, *a, **kw): return self
-    def __iter__(self): return iter(())
-    def __bool__(self): return False
-    def __len__(self): return 0
-
-# ---------- stub gốc ----------
-for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):
-    root = _Dummy(pkg); root.__path__ = []
-    sys.modules[pkg] = root
-
-# ---------- stub nhánh TensorFlow phổ biến ----------
-for tf_mod in (
-        "tensorflow.keras",
-        "tensorflow.keras.layers",
-        "tensorflow.python",        # phòng xa
-):
-    if tf_mod not in sys.modules:
-        m = _Dummy(tf_mod); m.__path__ = []
-        sys.modules[tf_mod] = m
-
-# ---------- stub sui.ml ----------
-ml_dummy = types.ModuleType("sui.ml"); ml_dummy.__path__ = []
-for cls in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
-    setattr(ml_dummy, cls, _Dummy(f"sui.ml.{cls}"))
-sys.modules["sui.ml"] = ml_dummy
-
-print("[sitecustomize] stubs ready (tensorflow.keras.layers + ML)")
 #----------------------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
