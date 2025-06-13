@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
-sui==0.1.9          # ← bản có transaction_builder
+sui @ git+https://github.com/MystenLabs/sui-python-sdk@923d1d8#egg=sui
 pynacl
