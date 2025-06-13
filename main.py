@@ -36,7 +36,10 @@ from typing import Dict, Optional
 
 import httpx
 from aiohttp import web
+import types, sys
+sys.modules['audioop'] = types.ModuleType('audioop')   # stub cho Python 3.13
 import discord
+
 from discord.ext import commands, tasks
 
 from pysui import SyncClient, SuiConfig
