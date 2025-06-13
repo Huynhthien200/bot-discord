@@ -1,16 +1,29 @@
-# sui_py.py – auto-detect layout
+# ─── sui_py.py  (đặt cạnh main.py) ─────────────────────────────
+"""
+Shim linh-hoạt cho mọi phiên bản 'sui' 0.1.x
+• Tự phát hiện nơi chứa SuiClient / SuiAccount
+• Tự tìm transaction builder (transaction_builder  hoặc  txn_builder)
+"""
+
 from importlib import import_module, util
 
-# ----- tìm module client -----
-if util.find_spec("sui.client"):                     # bản 0.1.7+ …
+# ----- lấy module client -----
+if util.find_spec("sui.client"):                 # 0.1.7+
     _client = import_module("sui.client")
-    _builder = import_module("sui.transaction_builder")
-else:                                               # bản 0.1.1 …
-    _client = import_module("sui")                  # lớp nằm ngay gốc
-    _builder = import_module("sui.txn_builder")     # builder gốc
+else:                                           # 0.1.1, 0.1.0 …
+    _client = import_module("sui")              # lớp nằm thẳng gốc
 
-# ----- re-export -----
-SuiClient  = getattr(_client, "SuiClient", _client.SyncClient)
-SuiAccount = _client.SuiAccount
-SyncClient = getattr(_client, "SyncClient", _client.SuiClient)
+# ----- lấy module builder -----
+if util.find_spec("sui.transaction_builder"):   # mới
+    _builder = import_module("sui.transaction_builder")
+elif util.find_spec("sui.txn_builder"):         # cũ
+    _builder = import_module("sui.txn_builder")
+else:
+    raise ImportError("Không tìm thấy transaction builder trong gói 'sui'")
+
+# ----- re-export cho code cũ -----
+SuiAccount = getattr(_client, "SuiAccount")
+SuiClient  = getattr(_client, "SuiClient", None) or getattr(_client, "SyncClient")
+SyncClient = getattr(_client, "SyncClient", SuiClient)
 sui_txn    = _builder
+# ────────────────────────────────────────────────────────────────
