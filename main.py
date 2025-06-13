@@ -4,7 +4,10 @@
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
-# ---------------------------------------------------------
+import sys, types
+sys.modules['numpy']  = types.ModuleType('numpy')
+sys.modules['pandas'] = types.ModuleType('pandas')
+# --------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
