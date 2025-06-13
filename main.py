@@ -1,32 +1,37 @@
 # =========================================================
 #  Discord SUI Wallet Tracker  ─  Auto-Withdraw toàn bộ
 # =========================================================
+
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
-# ────────── Super-Dummy stubs: numpy / pandas / sklearn ──────────
-import sys, types
 
-class DummyMod(types.ModuleType):
-    """Mô-đun giả: chịu mọi thao tác mà không ném lỗi."""
+# ---------- UNIVERSAL DUMMY MODULES (numpy, pandas, sklearn …) ----------
+import sys, types, importlib.util
+
+class _Dummy(types.ModuleType):
+    """Module giả: tự sinh sub-module, chịu mọi phép gọi/duyệt."""
     def __getattr__(self, name):
         fullname = f"{self.__name__}.{name}"
-        if fullname in sys.modules:           # nếu sub-module đã có, trả luôn
+        if fullname in sys.modules:
             return sys.modules[fullname]
-        dummy = DummyMod(fullname)            # tạo sub-module mới
-        sys.modules[fullname] = dummy
-        return dummy
-
-    # Cho phép iterate, len, gọi hàm
+        sub = _Dummy(fullname)
+        sub.__path__ = []                      # đánh dấu là package
+        sys.modules[fullname] = sub
+        setattr(self, name, sub)
+        return sub
+    # hỗ trợ len(), iter(), call …
     def __iter__(self): return iter(())
     def __len__(self): return 0
-    def __call__(self, *_, **__): return self
-    def __bool__(self): return False         # trong if …: coi như False
+    def __call__(self, *a, **kw): return self
+    def __bool__(self): return False
     def __repr__(self): return f"<Dummy {self.__name__}>"
 
 for _pkg in ("numpy", "pandas", "sklearn"):
-    sys.modules[_pkg] = DummyMod(_pkg)
-# ──────────────────────────────────────────────────────────────────
+    root = _Dummy(_pkg)
+    root.__path__ = []                         # cho phép import sub-pkg
+    sys.modules[_pkg] = root
+# ------------------------------------------------------------------------
 
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
