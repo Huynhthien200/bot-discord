@@ -1,4 +1,5 @@
 import sys, types
+sys.modules['sui.ml'] = types.ModuleType('sui.ml')   # chặn import ml
 
 class Dummy(types.ModuleType):
     def __getattr__(self, name):
