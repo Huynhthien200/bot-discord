@@ -1,0 +1,4 @@
+discord.py==2.3.2
+requests==2.31.0
+flask==3.0.3
+sui            # package chính thức trên PyPI
