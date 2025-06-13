@@ -1,6 +1,10 @@
 # =========================================================
 #  Discord SUI Wallet Tracker  ─  Auto-Withdraw toàn bộ
 # =========================================================
+# --- shim audioop cho Python 3.13 -------------------------
+import sys, types
+sys.modules['audioop'] = types.ModuleType('audioop')
+# ---------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
