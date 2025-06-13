@@ -1,5 +1,9 @@
 discord.py>=2.0.0
 aiohttp>=3.8.0
 httpx>=0.24.0
-pysui>=0.85.0
+
+# Dòng này trỏ tới wheel đã build sẵn pysui_fastcrypto để tránh biên dịch Rust
+https://github.com/FrankC01/pysui/releases/download/Release-0.85.0/pysui_fastcrypto-0.7.0-cp313-abi3-manylinux_2_17_x86_64.whl
+
+pysui==0.85.0
 psutil>=5.9.0
