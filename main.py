@@ -102,7 +102,7 @@ async def discord_send(msg: str):
         logging.warning("Không gửi được Discord: %s", e)
 
 # ────── vòng lặp theo dõi ──────
-@tasks.loop(seconds=10)
+@tasks.loop(seconds=1)                # ← kiểm tra 1 giây/lần
 async def tracker():
     for name, addr in watched_accounts.items():
         cur = await get_balance(addr)
