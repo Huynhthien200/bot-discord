@@ -1,4 +1,4 @@
 discord.py
 requests
 flask
-sui-py
+sui            # <— package chính thức, KHÔNG phải sui_py
