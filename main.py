@@ -4,9 +4,10 @@
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
+# --- lightweight stubs: numpy / pandas / sklearn -----------------
 import sys, types
-sys.modules['numpy']  = types.ModuleType('numpy')
-sys.modules['pandas'] = types.ModuleType('pandas')
+for _name in ("numpy", "pandas", "sklearn"):
+    sys.modules[_name] = types.ModuleType(_name)
 # --------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
