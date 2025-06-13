@@ -1,3 +1,4 @@
+print("[sitecustomize] LOADED from", __file__)
 import sys, types
 sys.modules['sui.ml'] = types.ModuleType('sui.ml')   # chặn import ml
 
