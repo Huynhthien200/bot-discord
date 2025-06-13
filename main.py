@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 import os
@@ -167,4 +166,3 @@ if __name__ == "__main__":
         "Tấn Dũng":     "0x5ecb5948c561b62fb6fe14a6bf8fba89d33ba6df8bea571fd568772083993f68",
     }
     bot.run(DISCORD_TOKEN)
-```
