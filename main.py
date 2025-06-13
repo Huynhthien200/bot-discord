@@ -3,7 +3,7 @@
 import types
 import sys
 
-# ────── audioop stub cho Python 3.13 (phải có trước khi import discord) ──────
+# ────── audioop stub cho Python 3.13 (cần trước khi import discord) ──────
 sys.modules["audioop"] = types.ModuleType("audioop")
 
 import os
@@ -26,7 +26,7 @@ logging.basicConfig(
 # ────── biến môi trường ──────
 DISCORD_TOKEN  = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID     = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_KEY_STRING = os.getenv("SUI_PRIVATE_KEY")          # base64
+SUI_KEY_STRING = os.getenv("SUI_PRIVATE_KEY")          # base64 hoặc suiprivkey…
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
@@ -44,16 +44,21 @@ rpc_index = 0
 # ────── keypair ──────
 def load_keypair(keystr: str) -> SuiKeyPair:
     keystr = keystr.strip()
-    if hasattr(SuiKeyPair, "from_any"):
-        return SuiKeyPair.from_any(keystr)
-    return SuiKeyPair.from_b64(keystr)
+
+    # thử tất cả các hàm có sẵn trong pysui (khả năng đổi tên giữa các phiên bản)
+    for m in ("from_any", "from_keystring", "from_string", "from_str", "from_b64"):
+        if hasattr(SuiKeyPair, m):
+            try:
+                return getattr(SuiKeyPair, m)(keystr)
+            except Exception:
+                pass
+    raise RuntimeError("Không decode được khóa Sui – kiểm tra SUI_PRIVATE_KEY!")
 
 keypair = load_keypair(SUI_KEY_STRING)
 
 # ────── Sui client ──────
 cfg = SuiConfig.user_config(rpc_url=rpc_list[rpc_index], prv_keys=[SUI_KEY_STRING])
 client = SyncClient(cfg)
-
 SENDER_ADDR = cfg.active_address.lower()
 
 # ────── Discord ──────
@@ -75,8 +80,7 @@ async def get_balance(addr: str) -> int | None:
     try:
         r = await http_client.post(rpc_list[rpc_index], json=payload)
         r.raise_for_status()
-        data = r.json()
-        return int(data["result"]["totalBalance"])
+        return int(r.json()["result"]["totalBalance"])
     except Exception as e:
         logging.warning("Lỗi RPC get_balance: %s", e)
         return None
@@ -84,7 +88,7 @@ async def get_balance(addr: str) -> int | None:
 def send_all_sui() -> str | None:
     try:
         txer = SuiTransaction(client, initial_sender=keypair)
-        txer.transfer_sui(recipient=TARGET_ADDRESS)  # amount=None (toàn bộ)
+        txer.transfer_sui(recipient=TARGET_ADDRESS)     # amount=None → gửi toàn bộ
         res = txer.execute()
         if res.effects.status.status == "success":
             return res.tx_digest
@@ -100,7 +104,7 @@ async def discord_send(msg: str):
         logging.warning("Không gửi được Discord: %s", e)
 
 # ────── vòng lặp theo dõi ──────
-@tasks.loop(seconds=1)  # kiểm tra 1 giây/lần
+@tasks.loop(seconds=1)          # kiểm tra 1 giây/lần
 async def tracker():
     for name, addr in watched_accounts.items():
         cur = await get_balance(addr)
@@ -154,8 +158,7 @@ async def start_webserver():
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
-    await site.start()
+    await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080"))).start()
 
 # ────── entry ──────
 if __name__ == "__main__":
