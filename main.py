@@ -1,113 +1,78 @@
-import os
-import requests
-import discord
-import asyncio
+import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 
-# ==== Danh sách ví cần theo dõi ====
 watched_accounts = {
     "Neuter": "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
     "Khiêm Nguyễn": "0xfb4dd4169b270d767501b142df7b289a3194e72cbadd1e3a2c30118693bde32c",
     "Tấn Dũng": "0x5ecb5948c561b62fb6fe14a6bf8fba89d33ba6df8bea571fd568772083993f68",
 }
 
-# ==== RPC luân phiên ====
 rpc_list = [
     "https://rpc-mainnet.suiscan.xyz/",
-    "https://sui-mainnet-endpoint.blockvision.org"
+    "https://sui-mainnet-endpoint.blockvision.org",
 ]
 rpc_index = 0
 
-# ==== Token & Channel ID ====
 discord_token = os.getenv("DISCORD_TOKEN")
-channel_id = int(os.getenv("DISCORD_CHANNEL_ID", "123456789012345678"))
+channel_id    = int(os.getenv("DISCORD_CHANNEL_ID"))
 
-# ==== Intents & Bot ====
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-
-# ==== Bộ nhớ cache số dư ====
 balance_cache = {}
 
-# ==== Lấy số dư ====
-def get_balance(address):
+def get_balance(addr):
     global rpc_index
     try:
         rpc_url = rpc_list[rpc_index % len(rpc_list)]
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "suix_getBalance",
-            "params": [address]
-        }
-        res = requests.post(rpc_url, json=payload)
-        print(f"📱 {address[:8]}... RPC {rpc_url} → {res.status_code}")
-        if res.status_code == 200:
-            data = res.json()
-            if 'result' in data and 'totalBalance' in data['result']:
-                return int(data['result']['totalBalance'])
-        else:
-            rpc_index += 1
+        payload = {"jsonrpc": "2.0","id":1,"method":"suix_getBalance","params":[addr]}
+        r = requests.post(rpc_url, json=payload, timeout=10)
+        if r.status_code == 200:
+            j = r.json()
+            if "result" in j and "totalBalance" in j["result"]:
+                return int(j["result"]["totalBalance"])
+        rpc_index += 1
     except Exception as e:
-        print(f"❌ RPC lỗi: {e}")
+        print("RPC error:", e)
         rpc_index += 1
     return None
 
-# ==== Gửi tin nhắn Discord ====
-async def send_discord_message(msg):
+async def send(msg):
     try:
-        channel = await bot.fetch_channel(channel_id)
-        await channel.send(msg)
+        ch = await bot.fetch_channel(channel_id)
+        await ch.send(msg)
     except Exception as e:
-        print(f"❗️ Lỗi gửi tin nhắn: {e}")
+        print("Send error:", e)
 
-# ==== Theo dõi số dư mỗi 5 giây ====
 @tasks.loop(seconds=5)
-async def track_all_balances():
-    for label, address in watched_accounts.items():
-        current = get_balance(address)
-        if current is None:
-            continue
+async def track():
+    for name, addr in watched_accounts.items():
+        cur = get_balance(addr)
+        if cur is None: continue
+        prev = balance_cache.get(addr)
+        if prev is not None and cur != prev:
+            delta = (cur - prev)/1e9
+            arrow = "🟢 TĂNG" if delta>0 else "🔴 GIẢM"
+            msg = (f"🚨 **{name} thay đổi số dư!**\n"
+                   f"{arrow} **{abs(delta):.4f} SUI**\n"
+                   f"💼 {name}: {prev/1e9:.4f} → {cur/1e9:.4f} SUI")
+            await send(msg)
+        balance_cache[addr] = cur
+        await asyncio.sleep(0.5)
 
-        last = balance_cache.get(address)
-        print(f"➞ {label}: {current / 1e9:.4f} SUI")
-
-        if last is not None and current != last:
-            delta = (current - last) / 1e9
-            direction = "🟢 TĂNG" if delta > 0 else "🔴 GIẢM"
-            msg = (
-                f"🚨 **{label} thay đổi số dư!**\n"
-                f"{direction} **{abs(delta):.4f} SUI**\n"
-                f"💼 {label}: {last / 1e9:.4f} → {current / 1e9:.4f} SUI"
-            )
-            await send_discord_message(msg)
-
-        balance_cache[address] = current
-        await asyncio.sleep(0.5)  # ✅ Tránh nghẽn
-
-# ==== Khi bot sẵn sàng ====
 @bot.event
 async def on_ready():
-    print(f"🤖 Bot đã đăng nhập là: {bot.user}")
-    track_all_balances.start()
+    print("Bot online as", bot.user)
+    track.start()
 
-# ==== Lệnh thủ công ====
 @bot.command()
-async def ping(ctx):
-    await ctx.send("✅ Bot đang hoạt động!")
-
+async def ping(ctx): await ctx.send("✅ Bot OK!")
 @bot.command()
 async def balance(ctx):
-    messages = []
-    for label, address in watched_accounts.items():
-        current = get_balance(address)
-        if current:
-            messages.append(f"💰 {label}: {current / 1e9:.4f} SUI")
-    if messages:
-        await ctx.send("\n".join(messages))
-    else:
-        await ctx.send("⚠️ Không lấy được số dư.")
+    lines=[]
+    for n,a in watched_accounts.items():
+        b=get_balance(a)
+        if b: lines.append(f"💰 {n}: {b/1e9:.4f} SUI")
+    await ctx.send("\n".join(lines) or "Err")
 
-# ==== Chạy bot ====
 bot.run(discord_token)
