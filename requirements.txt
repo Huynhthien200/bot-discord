@@ -1,5 +1,5 @@
 discord.py==2.3.2
 requests==2.31.0
-flask==3.0.3
-sui                 # package chính thức
-pynacl==1.5.0       # (nếu bạn ký TX raw)
+flask==3.0.3          # giữ Render awake
+sui                   # SDK chính thức (nhẹ, pure-python)
+pynacl==1.5.0         # ký Ed25519 raw-txn
