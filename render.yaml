@@ -2,16 +2,6 @@ services:
   - type: web
     name: sui-discord-bot
     runtime: python
-    region: singapore         # hoặc auto
+    pythonVersion: 3.11
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
-    plan: free                # có thể đổi sang starter/standard
-    envVars:
-      - key: DISCORD_TOKEN
-        value: ""             # điền sau trong dashboard
-      - key: DISCORD_CHANNEL_ID
-        value: ""
-      - key: SUI_PRIVATE_KEY
-        value: ""
-      - key: SUI_TARGET_ADDRESS
-        value: ""
