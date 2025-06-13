@@ -2,3 +2,4 @@ discord.py
 requests
 flask
 sui-py
+git+https://github.com/MystenLabs/sui-python-sdk.git#egg=sui_py
