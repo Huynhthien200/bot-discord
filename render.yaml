@@ -1,0 +1,7 @@
+services:
+  - type: worker          # << background worker, không đòi port
+    name: discord-sui-bot
+    env: python
+    startCommand: python main.py
+    plan: free
+    autoDeploy: true
