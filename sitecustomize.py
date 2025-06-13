@@ -1,34 +1,56 @@
+# ============================================================
+#  Lightweight ML/DL stub  –  dành cho Render / Replit free
+#  • Chặn numpy, pandas, sklearn, tensorflow & nhánh keras
+#  • Chặn toàn bộ sui.ml.* (FunkSVD, ALS, …)   +  sui.dl.PNN
+#  • Tạo class giả để các thư viện vẫn kế thừa được
+# ============================================================
+
 import sys, types
 
+# ---------- 1. Helper Dummy module ----------
 class _Dummy(types.ModuleType):
-    def __getattr__(self, n):
-        full = f"{self.__name__}.{n}"
+    """Trả về sub-module Dummy khi truy cập thuộc tính."""
+    def __getattr__(self, name):
+        full = f"{self.__name__}.{name}"
         if full in sys.modules:
             return sys.modules[full]
-        sub = _Dummy(full); sub.__path__ = []; sys.modules[full] = sub
+        sub = _Dummy(full); sub.__path__ = []          # coi như package
+        sys.modules[full] = sub
         return sub
+    # cho phép gọi / lặp / bool mà không lỗi
     def __call__(self, *a, **kw): return self
-    def __bool__(self): return False
+    def __iter__(self):   return iter(())
+    def __len__(self):    return 0
+    def __bool__(self):   return False
 
-# ----- stub numpy / pandas / sklearn / tensorflow -----
-for m in ("numpy", "pandas", "sklearn", "tensorflow"):
-    sys.modules[m] = _Dummy(m)
+# ---------- 2. Stub các gói ML nặng ----------
+for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):
+    root = _Dummy(pkg); root.__path__ = []
+    sys.modules[pkg] = root
 
-# keras.Model giả (đã có)
-keras = _Dummy("tensorflow.keras"); keras.__path__ = []
-keras.layers = _Dummy("tensorflow.keras.layers"); keras.layers.__path__ = []
-class _FakeBase(type): pass
-keras.Model = _FakeBase("Model", (), {})
-sys.modules["tensorflow.keras"] = keras
-sys.modules["tensorflow.keras.layers"] = keras.layers
+# ---------- 3. Stub nhánh TensorFlow phổ biến ----------
+keras_stub        = _Dummy("tensorflow.keras");        keras_stub.__path__ = []
+keras_layers_stub = _Dummy("tensorflow.keras.layers"); keras_layers_stub.__path__ = []
+sys.modules["tensorflow.keras"]        = keras_stub
+sys.modules["tensorflow.keras.layers"] = keras_layers_stub
+sys.modules.setdefault("tensorflow.python", _Dummy("tensorflow.python"))
 
-# ----- tạo module 'sui.ml' với 7 class dummy -----
-ml = types.ModuleType("sui.ml"); ml.__path__ = []
-for name in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
-    setattr(ml, name, _FakeBase(name, (), {}))
-sys.modules["sui.ml"] = ml
+# tạo lớp Model giả để có thể kế thừa
+class _FakeBase(type):
+    """Metaclass trống: cho phép class X(_FakeBase) kế thừa mà không lỗi."""
+    def __new__(mcls, name, bases, ns): return super().__new__(mcls, name, (), ns)
+keras_stub.Model = _FakeBase("Model", (), {})
 
-# ----- chặn luôn 'sui.dl' (Deep-Learning) -----
-sys.modules["sui.dl"] = types.ModuleType("sui.dl")
+# ---------- 4. Stub sui.ml  (FunkSVD, …) ----------
+ml_stub = types.ModuleType("sui.ml"); ml_stub.__path__ = []
+for _cls in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
+    setattr(ml_stub, _cls, _FakeBase(_cls, (), {}))
+sys.modules["sui.ml"] = ml_stub
 
-print("[sitecustomize] keras.Model & FunkSVD stubs ready ✔")
+# ---------- 5. Stub sui.dl  (PNN) ----------
+dl_stub = types.ModuleType("sui.dl"); dl_stub.__path__ = []
+# PNN kế thừa keras.Model giả để tránh mro lỗi
+dl_stub.PNN = _FakeBase("PNN", (keras_stub.Model,), {})
+sys.modules["sui.dl"] = dl_stub
+
+print("[sitecustomize] ML/DL stubs ready → numpy/pandas/sklearn/tensorflow & sui.ml|dl blocked ✔")
