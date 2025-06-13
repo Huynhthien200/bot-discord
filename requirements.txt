@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
-sui @ git+https://github.com/MystenLabs/sui-python-sdk@923d1d8#egg=sui
+sui
 pynacl
