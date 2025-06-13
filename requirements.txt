@@ -2,5 +2,4 @@ discord.py
 requests
 flask
 pynacl
-# SDK Sui “siêu nhẹ”, không ML/DL
-sui @ git+https://github.com/MystenLabs/sui-python-sdk@4c76d82#egg=sui
+sui
