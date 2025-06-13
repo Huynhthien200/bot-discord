@@ -1,0 +1,4 @@
+echo "3.11.8" > .python-version
+git add .python-version
+git commit -m "lock python to 3.11"
+git push
