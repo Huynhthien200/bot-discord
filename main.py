@@ -41,17 +41,24 @@ RPC_IDX = 0
 # ────── keypair ──────
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
-    # bech32 tiền tố suiprivkey…
-    if raw.startswith("suiprivkey"):
-        for attr in ("from_keystring", "from_any"):
-            if hasattr(SuiKeyPair, attr):
-                return getattr(SuiKeyPair, attr)(raw)
-    # còn lại: thử from_any rồi tới from_b64
+
+    # 1. pysui >= 0.85: tự hiểu mọi định dạng
     if hasattr(SuiKeyPair, "from_any"):
-        return SuiKeyPair.from_any(raw)
+        try:
+            return SuiKeyPair.from_any(raw)
+        except Exception:
+            pass  # thử tiếp
+
+    # 2. Bech32 (suiprivkey…)
+    if raw.startswith("suiprivkey") and hasattr(SuiKeyPair, "from_keystring"):
+        try:
+            return SuiKeyPair.from_keystring(raw)
+        except Exception:
+            pass  # thử tiếp
+
+    # 3. Mặc định: base64
     return SuiKeyPair.from_b64(raw)
 
-keypair = load_keypair(SUI_KEY_STRING)
 
 # ────── client Sui ──────
 cfg    = SuiConfig.user_config(rpc_url=RPCS[RPC_IDX], prv_keys=[SUI_KEY_STRING])
