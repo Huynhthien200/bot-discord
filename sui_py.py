@@ -1,17 +1,16 @@
-"""
-sui_py.py  –  shim tối giản
-• Chỉ import phần core của package 'sui'
-• Không động tới 'sui.ml' nên KHÔNG cần numpy/pandas/sklearn
-"""
+# sui_py.py – auto-detect layout
+from importlib import import_module, util
 
-from importlib import import_module as _imp
+# ----- tìm module client -----
+if util.find_spec("sui.client"):                     # bản 0.1.7+ …
+    _client = import_module("sui.client")
+    _builder = import_module("sui.transaction_builder")
+else:                                               # bản 0.1.1 …
+    _client = import_module("sui")                  # lớp nằm ngay gốc
+    _builder = import_module("sui.txn_builder")     # builder gốc
 
-# --- import các module core cần dùng ---
-_client  = _imp("sui.client")                 # lớp SuiClient, SuiAccount
-_builder = _imp("sui.transaction_builder")    # builder giao dịch
-
-# --- Re-export cho code cũ sử dụng ---
-SuiClient  = _client.SuiClient
+# ----- re-export -----
+SuiClient  = getattr(_client, "SuiClient", _client.SyncClient)
 SuiAccount = _client.SuiAccount
-SyncClient = _client.SuiClient       # alias cho code hiện tại
-sui_txn    = _builder                # module builder (chứa TransferSui ...)
+SyncClient = getattr(_client, "SyncClient", _client.SuiClient)
+sui_txn    = _builder
