@@ -6,33 +6,6 @@
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
 
-# ---------- UNIVERSAL DUMMY MODULES (numpy, pandas, sklearn …) ----------
-import sys, types, importlib.util
-
-class _Dummy(types.ModuleType):
-    """Module giả: tự sinh sub-module, chịu mọi phép gọi/duyệt."""
-    def __getattr__(self, name):
-        fullname = f"{self.__name__}.{name}"
-        if fullname in sys.modules:
-            return sys.modules[fullname]
-        sub = _Dummy(fullname)
-        sub.__path__ = []                      # đánh dấu là package
-        sys.modules[fullname] = sub
-        setattr(self, name, sub)
-        return sub
-    # hỗ trợ len(), iter(), call …
-    def __iter__(self): return iter(())
-    def __len__(self): return 0
-    def __call__(self, *a, **kw): return self
-    def __bool__(self): return False
-    def __repr__(self): return f"<Dummy {self.__name__}>"
-
-for _pkg in ("numpy", "pandas", "sklearn"):
-    root = _Dummy(_pkg)
-    root.__path__ = []                         # cho phép import sub-pkg
-    sys.modules[_pkg] = root
-# ------------------------------------------------------------------------
-
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
 from sui_py import SuiAccount, SyncClient, sui_txn         # pip install sui-py
