@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
-sui
+sui==0.0.18      # ← bản nhẹ, không ml
 pynacl
