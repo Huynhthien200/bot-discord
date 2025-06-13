@@ -4,6 +4,29 @@
 # --- shim audioop cho Python 3.13 -------------------------
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
+# ────────── Super-Dummy stubs: numpy / pandas / sklearn ──────────
+import sys, types
+
+class DummyMod(types.ModuleType):
+    """Mô-đun giả: chịu mọi thao tác mà không ném lỗi."""
+    def __getattr__(self, name):
+        fullname = f"{self.__name__}.{name}"
+        if fullname in sys.modules:           # nếu sub-module đã có, trả luôn
+            return sys.modules[fullname]
+        dummy = DummyMod(fullname)            # tạo sub-module mới
+        sys.modules[fullname] = dummy
+        return dummy
+
+    # Cho phép iterate, len, gọi hàm
+    def __iter__(self): return iter(())
+    def __len__(self): return 0
+    def __call__(self, *_, **__): return self
+    def __bool__(self): return False         # trong if …: coi như False
+    def __repr__(self): return f"<Dummy {self.__name__}>"
+
+for _pkg in ("numpy", "pandas", "sklearn"):
+    sys.modules[_pkg] = DummyMod(_pkg)
+# ──────────────────────────────────────────────────────────────────
 
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
