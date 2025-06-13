@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
+sui==0.1.1            # ← bản PyPI sớm nhất
 pynacl
-sui @ https://github.com/MystenLabs/sui-python-sdk/archive/refs/tags/v0.0.18.zip
