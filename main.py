@@ -26,10 +26,17 @@ class _Dummy(types.ModuleType):
     def __repr__(self): return f"<Dummy {self.__name__}>"
 
 # ------------------ 2. Stub numpy / pandas / sklearn / tensorflow ------------------
-for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):   # ⇦ thêm ở đây
+for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):
     root = _Dummy(pkg)
     root.__path__ = []
     sys.modules[pkg] = root
+
+    # 👉 nếu là tensorflow, tạo sẵn sub-module keras
+    if pkg == "tensorflow":
+        keras_stub = _Dummy("tensorflow.keras")
+        keras_stub.__path__ = []
+        sys.modules["tensorflow.keras"] = keras_stub
+        # (bạn có thể thêm tf.keras.layers, tf.python v.v. tương tự nếu cần)
 
 # ------------------ 3. Stub sui.ml + các class ------------------
 ml_dummy = types.ModuleType("sui.ml")
