@@ -5,15 +5,17 @@ import os
 import logging
 import httpx
 import types, sys
+from types import SimpleNamespace
+from pathlib import Path
 
-# ── stub audioop cho Python ≥ 3.13 ─────────────────────────────────
+# ── stub audioop cho Python ≥ 3.13 ────────────────────────────────
 sys.modules["audioop"] = types.ModuleType("audioop")
 
 from aiohttp import web
 import discord
 from discord.ext import commands, tasks
 
-from pysui import SyncClient, SuiConfig
+from pysui import SyncClient
 from pysui.sui.sui_crypto import SuiKeyPair
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 
@@ -24,7 +26,7 @@ logging.basicConfig(level=logging.INFO,
 # ── biến môi trường ───────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY")          # base64 hoặc suiprivkey…
+SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 RPC_ENV         = os.getenv("SUI_RPC_LIST", "")
 
@@ -34,7 +36,7 @@ if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
         "SUI_PRIVATE_KEY hoặc SUI_TARGET_ADDRESS"
     )
 
-# ── khởi tạo RPC list ─────────────────────────────────────────────
+# ── RPC list ──────────────────────────────────────────────────────
 rpc_list: list[str] = [r.strip() for r in RPC_ENV.split(",") if r.strip()] or [
     "https://rpc-mainnet.suiscan.xyz/",
     "https://sui-mainnet-endpoint.blockvision.org",
@@ -56,8 +58,17 @@ def load_keypair(raw: str) -> SuiKeyPair:
 
 keypair = load_keypair(SUI_KEY_STRING)
 
-# ── SyncClient cho giao dịch (dùng cấu hình mặc định) ─────────────
-client = SyncClient(SuiConfig.default_config())
+# ── SyncClient: tự dựng cấu hình đơn giản tránh cần client.yaml ──
+class SimpleConfig(SimpleNamespace):
+    def __init__(self, rpc_url: str):
+        super().__init__(
+            rpc_url   = rpc_url.rstrip("/"),
+            ws_url    = "",
+            faucet_url= "",
+        )
+
+cfg    = SimpleConfig(rpc_list[0])
+client = SyncClient(cfg)
 
 # ── Discord bot ───────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -68,12 +79,10 @@ balance_cache: dict[str, int] = {}
 
 # ── tiện ích RPC ──────────────────────────────────────────────────
 def rotate_rpc() -> None:
-    """Chọn RPC khác cho các lời gọi đọc số dư."""
     global rpc_index
     rpc_index = (rpc_index + 1) % len(rpc_list)
 
 async def get_balance(addr: str) -> int | None:
-    """Lấy số dư SUI (lamport) với cơ chế xoay RPC."""
     payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [addr]}
     for _ in range(len(rpc_list)):
         try:
@@ -86,10 +95,9 @@ async def get_balance(addr: str) -> int | None:
     return None
 
 def send_all_sui() -> str | None:
-    """Chuyển toàn bộ SUI về TARGET_ADDRESS, trả về digest nếu thành công."""
     try:
         tx = SuiTransaction(client, initial_sender=keypair)
-        tx.transfer_sui(recipient=TARGET_ADDRESS)      # amount=None → toàn bộ
+        tx.transfer_sui(recipient=TARGET_ADDRESS)          # amount=None → full balance
         res = tx.execute()
         if res.effects.status.status == "success":
             return res.tx_digest
@@ -138,11 +146,11 @@ async def on_ready():
     logging.info("🤖 Logged in as %s", bot.user)
 
 @bot.command()
-async def ping(ctx):                                   # !ping
+async def ping(ctx):
     await ctx.send("✅ Bot OK!")
 
 @bot.command()
-async def balance(ctx):                                # !balance
+async def balance(ctx):
     lines = []
     for name, addr in watched_accounts.items():
         b = await get_balance(addr)
