@@ -6,49 +6,43 @@
 import sys, types
 sys.modules['audioop'] = types.ModuleType('audioop')
 #-----------------------------------------------------------
-print("[sitecustomize] LOADED from", __file__)
 import sys, types
 
-# ------------------ 1. Dummy helper ------------------
 class _Dummy(types.ModuleType):
     def __getattr__(self, name):
         full = f"{self.__name__}.{name}"
-        if full in sys.modules:
+        if full in sys.modules:                 # đã tạo trước
             return sys.modules[full]
-        sub = _Dummy(full)
-        sub.__path__ = []                # coi như package
+        sub = _Dummy(full); sub.__path__ = []   # tạo sub-package
         sys.modules[full] = sub
         return sub
     def __call__(self, *a, **kw): return self
     def __iter__(self): return iter(())
-    def __len__(self): return 0
     def __bool__(self): return False
-    def __repr__(self): return f"<Dummy {self.__name__}>"
+    def __len__(self): return 0
 
-# ------------------ 2. Stub numpy / pandas / sklearn / tensorflow ------------------
+# ---------- stub gốc ----------
 for pkg in ("numpy", "pandas", "sklearn", "tensorflow"):
-    root = _Dummy(pkg)
-    root.__path__ = []
+    root = _Dummy(pkg); root.__path__ = []
     sys.modules[pkg] = root
 
-    # 👉 nếu là tensorflow, tạo sẵn sub-module keras
-    if pkg == "tensorflow":
-        keras_stub = _Dummy("tensorflow.keras")
-        keras_stub.__path__ = []
-        sys.modules["tensorflow.keras"] = keras_stub
-        # (bạn có thể thêm tf.keras.layers, tf.python v.v. tương tự nếu cần)
+# ---------- stub nhánh TensorFlow phổ biến ----------
+for tf_mod in (
+        "tensorflow.keras",
+        "tensorflow.keras.layers",
+        "tensorflow.python",        # phòng xa
+):
+    if tf_mod not in sys.modules:
+        m = _Dummy(tf_mod); m.__path__ = []
+        sys.modules[tf_mod] = m
 
-# ------------------ 3. Stub sui.ml + các class ------------------
-ml_dummy = types.ModuleType("sui.ml")
-ml_dummy.__path__ = []                  # cho Python coi là package
+# ---------- stub sui.ml ----------
+ml_dummy = types.ModuleType("sui.ml"); ml_dummy.__path__ = []
+for cls in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
+    setattr(ml_dummy, cls, _Dummy(f"sui.ml.{cls}"))
+sys.modules["sui.ml"] = ml_dummy
 
-# Tạo class giả cho mỗi tên mà sui import
-for _name in ("FunkSVD", "BiasSVD", "SVDpp", "BPR", "ALS", "AFM", "FM"):
-    setattr(ml_dummy, _name, _Dummy(f"sui.ml.{_name}"))
-
-sys.modules["sui.ml"] = ml_dummy        # đăng ký vào sys.modules
-
-print("[sitecustomize] ML stub ready, numpy/pandas/sklearn stub ready ✔")
+print("[sitecustomize] stubs ready (tensorflow.keras.layers + ML)")
 #----------------------------------------------------------------------------
 import os, requests, discord, asyncio
 from discord.ext import commands, tasks
