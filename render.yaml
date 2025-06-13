@@ -2,6 +2,6 @@ services:
   - type: web
     name: sui-discord-bot
     runtime: python
-    pythonVersion: 3.11
+    pythonVersion: 3.11        # ← dòng này ép Render về 3.11
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
