@@ -1,5 +1,5 @@
 discord.py
 requests
 flask
-sui==0.1.8            # 0.1.8 đã có transaction_builder
+sui==0.1.9          # ← bản có transaction_builder
 pynacl
