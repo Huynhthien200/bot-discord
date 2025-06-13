@@ -1,4 +1,7 @@
 discord.py
 requests
 flask
-sui-sdk==0.0.8
+sui         # package chính thức trên PyPI
+numpy
+scipy
+pandas
