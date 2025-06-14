@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 """
 Discord-bot theo dõi ví Sui:
-• Hỗ trợ khóa Base64 lẫn Bech32 (suiprivkey…)
+• Hỗ trợ khóa Base64 & Bech32 (suiprivkey…)
 • Phát hiện ví nguồn nhận SUI → rút sạch về TARGET_ADDRESS
-• Cảnh báo tăng/giảm số dư các ví theo dõi – kiểm tra mỗi 1 giây
+• Báo tăng/giảm số dư các ví đang theo dõi (tần suất 1 giây)
 """
 # ────────────────────────────────────────────────────────────────
 import os, sys, types, logging, base64, httpx
 from aiohttp import web
 
-# stub audioop cho Python ≥ 3.13 (discord.py voice)
+# stub audioop cho Python ≥3.13
 sys.modules["audioop"] = types.ModuleType("audioop")
 
 import discord
@@ -25,28 +25,27 @@ logging.basicConfig(level=logging.INFO,
 
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY")
+SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY")        # base64 hoặc suiprivkey…
 TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
-    raise RuntimeError("Thiếu biến môi trường bắt buộc")
+    raise RuntimeError("Thiếu DISCORD_TOKEN, DISCORD_CHANNEL_ID, "
+                       "SUI_PRIVATE_KEY hoặc SUI_TARGET_ADDRESS")
 
-RPCS = [
-    "https://rpc-mainnet.suiscan.xyz/",
-    "https://sui-mainnet-endpoint.blockvision.org",
-]
+RPCS    = ["https://rpc-mainnet.suiscan.xyz/",
+           "https://sui-mainnet-endpoint.blockvision.org"]
 RPC_IDX = 0
 # ────────────────────────────────────────────────────────────────
 def _bech32_to_b64(raw: str) -> str:
     """Chuyển suiprivkey… (Bech32) → Base64."""
     try:
-        from bech32 import bech32_decode, convertbits        # pip install bech32
+        from bech32 import bech32_decode, convertbits     # pip install bech32
     except ImportError as exc:
-        raise RuntimeError("Thiếu thư viện bech32 (pip install bech32)") from exc
+        raise RuntimeError("Thiếu gói bech32: pip install bech32") from exc
 
     hrp, data = bech32_decode(raw)
     if hrp != "suiprivkey" or data is None:
-        raise ValueError("Không phải khóa Bech32 Sui hợp lệ")
+        raise ValueError("Không phải khóa Bech32 hợp lệ")
 
     decoded = bytes(convertbits(data, 5, 8, False))
     if len(decoded) not in (32, 64):
@@ -54,21 +53,28 @@ def _bech32_to_b64(raw: str) -> str:
     return base64.b64encode(decoded).decode()
 
 def load_keypair(raw: str) -> SuiKeyPair:
+    """Tự nhận dạng khóa & trả về SuiKeyPair."""
     raw = raw.strip()
-    # pysui mới có from_any
+
+    # pysui mới (>=0.85) – hỗ trợ nhiều định dạng
     if hasattr(SuiKeyPair, "from_any"):
         try:
             return SuiKeyPair.from_any(raw)
         except Exception:
             pass
-    # Bech32
-    if raw.startswith("suiprivkey"):
-        try:
-            if hasattr(SuiKeyPair, "from_keystring"):
+
+    # Khóa Bech32
+    if raw.lower().startswith("suiprivkey"):
+        # thử API gốc nếu có
+        if hasattr(SuiKeyPair, "from_keystring"):
+            try:
                 return SuiKeyPair.from_keystring(raw)
-        except Exception:
-            raw = _bech32_to_b64(raw)
-    # Base64
+            except Exception:
+                pass
+        # tự decode Bech32 → Base64
+        raw = _bech32_to_b64(raw)
+
+    # Mặc định: Base64
     return SuiKeyPair.from_b64(raw)
 
 keypair = load_keypair(SUI_KEY_STRING)
@@ -96,14 +102,14 @@ async def get_balance(addr: str) -> int | None:
         return None
 
 def withdraw_all() -> str | None:
-    """Rút toàn bộ SUI về TARGET_ADDRESS, trả tx_digest nếu thành công."""
+    """Rút toàn bộ SUI về TARGET_ADDRESS, trả tx-digest nếu OK."""
     try:
-        tx = SuiTransaction(client)           # pysui 0.85 - chỉ cần client
-        tx.transfer_sui(recipient=TARGET_ADDRESS)  # amount=None → toàn bộ (trừ phí)
+        tx = SuiTransaction(client)
+        tx.transfer_sui(recipient=TARGET_ADDRESS)   # amount=None → toàn bộ
         res = tx.execute()
         if res.effects.status.status == "success":
             return res.tx_digest
-        logging.error("Giao dịch thất bại: %s", res.effects.status)
+        logging.error("Tx thất bại: %s", res.effects.status)
     except Exception as exc:
         logging.error("withdraw_all thất bại: %s", exc)
     return None
@@ -131,7 +137,6 @@ async def tracker():
                 f"{arrow} **{abs(delta):.4f} SUI**\n"
                 f"💼 {name}: {prev/1e9:.4f} → {cur/1e9:.4f} SUI"
             )
-            # nếu ví nguồn vừa nhận tiền → rút
             if delta > 0 and addr.lower() == SENDER_ADDR:
                 tx = withdraw_all()
                 if tx:
@@ -155,9 +160,9 @@ async def ping(ctx):
 async def balance(ctx):
     lines = []
     for name, addr in WATCHED.items():
-        b = await get_balance(addr)
-        if b is not None:
-            lines.append(f"💰 {name}: {b/1e9:.4f} SUI")
+        bal = await get_balance(addr)
+        if bal is not None:
+            lines.append(f"💰 {name}: {bal/1e9:.4f} SUI")
     await ctx.send("\n".join(lines) or "⚠️ RPC lỗi")
 # ────────────────────────────────────────────────────────────────
 async def handle_ping(_):
