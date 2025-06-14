@@ -95,9 +95,10 @@ async def get_balance(addr: str) -> int | None:
 
 def withdraw_all() -> str | None:
     try:
-        tx = SuiTransaction(client)
+        tx = SuiTransaction()          # 1️⃣ khởi tạo trống
+        tx.set_sender(keypair)         # 2️⃣ chỉ định signer
         tx.transfer_sui(recipient=TARGET_ADDRESS)
-        res = tx.execute()
+        res = tx.execute(client)       # 3️⃣ truyền client khi gửi
         if res.effects.status.status == "success":
             return res.tx_digest
         logging.error("Tx thất bại: %s", res.effects.status)
