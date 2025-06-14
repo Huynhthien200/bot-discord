@@ -6,8 +6,10 @@ import types
 import logging
 import httpx
 from aiohttp import web
+
 # ────── stub audioop cho Python ≥3.13 ──────
 sys.modules["audioop"] = types.ModuleType("audioop")
+
 import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
@@ -59,6 +61,8 @@ def load_keypair(raw: str) -> SuiKeyPair:
     # 3. Mặc định: base64
     return SuiKeyPair.from_b64(raw)
 
+
+keypair = load_keypair(SUI_KEY_STRING)
 
 # ────── client Sui ──────
 cfg    = SuiConfig.user_config(rpc_url=RPCS[RPC_IDX], prv_keys=[SUI_KEY_STRING])
