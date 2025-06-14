@@ -95,12 +95,17 @@ async def get_balance(addr: str) -> int | None:
 
 def withdraw_all() -> str | None:
     try:
-        tx = SuiTransaction()          # 1️⃣ khởi tạo trống
-        tx.set_sender(keypair)         # 2️⃣ chỉ định signer
-        tx.transfer_sui(recipient=TARGET_ADDRESS)
-        res = tx.execute(client)       # 3️⃣ truyền client khi gửi
+        # 1️⃣  khởi tạo transaction – CHÚ Ý dùng client=...
+        tx = SuiTransaction(client=client, initial_sender=keypair)
+
+        # 2️⃣  chuyển toàn bộ SUI (amount=None là “full balance”)
+        tx.transfer_sui(recipient=TARGET_ADDRESS)   # hoặc tx.pay_sui(...)
+
+        # 3️⃣  gửi giao dịch
+        res = tx.execute()
+
         if res.effects.status.status == "success":
-            return res.tx_digest
+            return res.tx_digest               # trả về tx-hash
         logging.error("Tx thất bại: %s", res.effects.status)
     except Exception as exc:
         logging.error("withdraw_all thất bại: %s", exc)
