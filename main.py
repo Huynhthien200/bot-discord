@@ -1,13 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-import os
-import sys
-import types
-import logging
-import httpx
+import os, sys, types, base64, logging, httpx
 from aiohttp import web
 
-# ────── stub audioop cho Python ≥3.13 ──────
+# ─── stub audioop (Python ≥3.13) ───────────────────────────────────────────────
 sys.modules["audioop"] = types.ModuleType("audioop")
 
 import discord
@@ -16,58 +12,89 @@ from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 
-# ────── logging ──────
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
-)
+# ─── log ───────────────────────────────────────────────────────────────────────
+logging.basicConfig(level=logging.INFO,
+                    format="%(asctime)s | %(levelname)-8s | %(message)s")
 
-# ────── biến môi trường ──────
+# ─── ENV ───────────────────────────────────────────────────────────────────────
 DISCORD_TOKEN  = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID     = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_KEY_STRING = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
-    raise RuntimeError(
-        "Thiếu DISCORD_TOKEN, DISCORD_CHANNEL_ID, SUI_PRIVATE_KEY hoặc SUI_TARGET_ADDRESS"
-    )
+    raise RuntimeError("Thiếu biến môi trường thiết yếu.")
 
-# ────── RPC ──────
+# ─── RPC ───────────────────────────────────────────────────────────────────────
 RPCS = [
     "https://rpc-mainnet.suiscan.xyz/",
     "https://sui-mainnet-endpoint.blockvision.org",
 ]
 RPC_IDX = 0
 
-# ────── keypair ──────
+# ─── Bech32 helpers (tối giản) ────────────────────────────────────────────────
+BECH32_ALPHABET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+
+def _bech32_polymod(values):
+    GEN = (0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3)
+    chk = 1
+    for v in values:
+        b = (chk >> 25) & 0xFF
+        chk = ((chk & 0x1FFFFFF) << 5) ^ v
+        for i in range(5):
+            chk ^= GEN[i] if ((b >> i) & 1) else 0
+    return chk
+
+def _bech32_hrp_expand(hrp):
+    return [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+
+def _bech32_verify(hrp, data):
+    return _bech32_polymod(_bech32_hrp_expand(hrp) + data) == 1
+
+def _bech32_decode(bech):
+    bech = bech.lower()
+    pos  = bech.rfind('1')
+    hrp, data = bech[:pos], bech[pos+1:]
+    decoded = [BECH32_ALPHABET.find(c) for c in data]
+    if min(decoded) == -1 or not _bech32_verify(hrp, decoded):
+        raise ValueError("Bech32 decode fail")
+    return hrp, decoded[:-6]          # strip checksum
+
+def _convert_bits(data, from_bits, to_bits, pad=True):
+    acc = 0
+    bits = 0
+    out  = []
+    maxv = (1 << to_bits) - 1
+    for value in data:
+        acc = (acc << from_bits) | value
+        bits += from_bits
+        while bits >= to_bits:
+            bits -= to_bits
+            out.append((acc >> bits) & maxv)
+    if pad and bits:
+        out.append((acc << (to_bits - bits)) & maxv)
+    return bytes(out)
+
+def suiprivkey_to_b64(bech32_key: str) -> str:
+    hrp, data = _bech32_decode(bech32_key)
+    if hrp != "suiprivkey":
+        raise ValueError("Không phải định dạng suiprivkey")
+    raw = _convert_bits(data, 5, 8, False)
+    return base64.b64encode(raw).decode()
+
+# ─── Keypair ───────────────────────────────────────────────────────────────────
 def load_keypair(raw: str) -> SuiKeyPair:
-    """Thử lần lượt mọi phương án giải mã khoá, báo lỗi ngay khi thất bại."""
     raw = raw.strip()
-
-    # pysui ≥0.85 hỗ trợ from_any – ưu tiên dùng
-    if hasattr(SuiKeyPair, "from_any"):
-        return SuiKeyPair.from_any(raw)
-
-    # Bech32 (suiprivkey…)
-    if raw.startswith("suiprivkey") and hasattr(SuiKeyPair, "from_keystring"):
-        return SuiKeyPair.from_keystring(raw)
-
-    # Base64
+    if raw.startswith("suiprivkey"):
+        raw = suiprivkey_to_b64(raw)
     return SuiKeyPair.from_b64(raw)
 
+keypair = load_keypair(SUI_KEY_STRING)
 
-try:
-    keypair = load_keypair(SUI_KEY_STRING)
-except Exception as exc:
-    raise RuntimeError("Không decode được SUI_PRIVATE_KEY – kiểm tra lại giá trị!") from exc
-
-# ────── client Sui ──────
+# ─── Client / Discord ─────────────────────────────────────────────────────────
 cfg    = SuiConfig.user_config(rpc_url=RPCS[RPC_IDX], prv_keys=[SUI_KEY_STRING])
 client = SyncClient(cfg)
 SENDER_ADDR = str(cfg.active_address).lower()
 
-# ────── Discord ──────
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -75,14 +102,8 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 balance_cache: dict[str, int] = {}
 http_client = httpx.AsyncClient(timeout=10.0)
 
-# ────── tiện ích ──────
 async def get_balance(addr: str) -> int | None:
-    payload = {
-        "jsonrpc": "2.0",
-        "id":      1,
-        "method":  "suix_getBalance",
-        "params":  [addr],
-    }
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [addr]}
     try:
         r = await http_client.post(RPCS[RPC_IDX], json=payload)
         r.raise_for_status()
@@ -109,14 +130,12 @@ async def discord_send(msg: str):
     except Exception as exc:
         logging.warning("Không gửi được Discord: %s", exc)
 
-# ────── theo dõi ──────
 @tasks.loop(seconds=1)
 async def tracker():
     for name, addr in WATCHED.items():
         cur = await get_balance(addr)
         if cur is None:
             continue
-
         prev = balance_cache.get(addr)
         if prev is not None and cur != prev:
             delta = (cur - prev) / 1e9
@@ -135,7 +154,6 @@ async def tracker():
                     )
         balance_cache[addr] = cur
 
-# ────── Discord events ──────
 @bot.event
 async def on_ready():
     bot.loop.create_task(start_webserver())
@@ -148,14 +166,12 @@ async def ping(ctx):
 
 @bot.command()
 async def balance(ctx):
-    lines = []
-    for name, addr in WATCHED.items():
-        b = await get_balance(addr)
-        if b is not None:
-            lines.append(f"💰 {name}: {b/1e9:.4f} SUI")
+    lines = [
+        f"💰 {name}: {await get_balance(addr)/1e9:.4f} SUI"
+        for name, addr in WATCHED.items()
+    ]
     await ctx.send("\n".join(lines) or "⚠️ RPC lỗi")
 
-# ────── HTTP keep-alive ──────
 async def handle_ping(_):
     return web.Response(text="✅ Discord SUI bot is alive!")
 
@@ -164,10 +180,9 @@ async def start_webserver():
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
-    await site.start()
+    await web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080"))).start()
 
-# ────── entry ──────
+# ─── entry ─────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     WATCHED = {
         "Neuter":       "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
