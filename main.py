@@ -42,27 +42,25 @@ RPC_IDX = 0
 
 # ────── keypair ──────
 def load_keypair(raw: str) -> SuiKeyPair:
+    """Thử lần lượt mọi phương án giải mã khoá, báo lỗi ngay khi thất bại."""
     raw = raw.strip()
 
-    # 1. pysui >= 0.85: tự hiểu mọi định dạng
+    # pysui ≥0.85 hỗ trợ from_any – ưu tiên dùng
     if hasattr(SuiKeyPair, "from_any"):
-        try:
-            return SuiKeyPair.from_any(raw)
-        except Exception:
-            pass  # thử tiếp
+        return SuiKeyPair.from_any(raw)
 
-    # 2. Bech32 (suiprivkey…)
+    # Bech32 (suiprivkey…)
     if raw.startswith("suiprivkey") and hasattr(SuiKeyPair, "from_keystring"):
-        try:
-            return SuiKeyPair.from_keystring(raw)
-        except Exception:
-            pass  # thử tiếp
+        return SuiKeyPair.from_keystring(raw)
 
-    # 3. Mặc định: base64
+    # Base64
     return SuiKeyPair.from_b64(raw)
 
 
-keypair = load_keypair(SUI_KEY_STRING)
+try:
+    keypair = load_keypair(SUI_KEY_STRING)
+except Exception as exc:
+    raise RuntimeError("Không decode được SUI_PRIVATE_KEY – kiểm tra lại giá trị!") from exc
 
 # ────── client Sui ──────
 cfg    = SuiConfig.user_config(rpc_url=RPCS[RPC_IDX], prv_keys=[SUI_KEY_STRING])
@@ -107,7 +105,7 @@ def pay_all_sui() -> str | None:
 async def discord_send(msg: str):
     try:
         ch = await bot.fetch_channel(CHANNEL_ID)
-        await ch.send(msg)
+        await ch.send(msg, silent=True)
     except Exception as exc:
         logging.warning("Không gửi được Discord: %s", exc)
 
