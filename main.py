@@ -93,30 +93,34 @@ async def get_balance(addr: str) -> int | None:
         logging.warning("RPC lỗi get_balance: %s", exc)
         return None
 
+# ─── lấy gas-coin đầu tiên của ví ────────────────────────────────
+def first_gas_coin(owner: str) -> str | None:
+    # trả về danh sách Coin của owner (mặc định loại SUI)
+    r = client.get_coins(owner=owner)
+    if r and r.data and r.data.data:
+        return r.data.data[0].coin_object_id          # coin đầu tiên
+    return None
+
+
 def withdraw_all() -> str | None:
     try:
-        # 1️⃣  khởi tạo transaction – CHÚ Ý dùng client=...
-        tx = SuiTransaction(client=client, initial_sender=keypair)
+        coin_id = first_gas_coin(SENDER_ADDR)
+        if not coin_id:
+            logging.error("Không tìm thấy gas-coin để gửi")
+            return None
 
-        # 2️⃣  chuyển toàn bộ SUI (amount=None là “full balance”)
-        tx.transfer_sui(recipient=TARGET_ADDRESS)   # hoặc tx.pay_sui(...)
-
-        # 3️⃣  gửi giao dịch
+        tx = SuiTransaction(client=client, initial_sender=keypair)   # ✅ có client=
+        # amount=None  → gửi toàn bộ số dư của coin_id
+        tx.transfer_sui(recipient=TARGET_ADDRESS,
+                        from_coin=coin_id,
+                        amount=None)
         res = tx.execute()
-
         if res.effects.status.status == "success":
-            return res.tx_digest               # trả về tx-hash
+            return res.tx_digest
         logging.error("Tx thất bại: %s", res.effects.status)
     except Exception as exc:
         logging.error("withdraw_all thất bại: %s", exc)
     return None
-
-async def discord_send(msg: str):
-    try:
-        ch = await bot.fetch_channel(CHANNEL_ID)
-        await ch.send(msg)
-    except Exception as exc:
-        logging.warning("Không gửi Discord: %s", exc)
 # ─────────────────────────────────────────────────────────
 @tasks.loop(seconds=1)
 async def tracker():
