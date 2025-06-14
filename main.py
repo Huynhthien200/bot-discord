@@ -22,23 +22,34 @@ if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
     raise RuntimeError("Thiếu biến môi trường bắt buộc")
 
 # ─── keypair ───────────────────────────────────────────────────────
+import base64
+from bech32 import bech32_decode, convertbits      # pip install bech32
+
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
+
+    # Bech32 private-key (suiprivkey…)
     if raw.startswith("suiprivkey"):
         try:
-            from bech32 import bech32_decode, convertbits
             hrp, data = bech32_decode(raw)
-            if hrp != "suiprivkey" or len(data) not in (52, 53):
-                raise ValueError
-            b = bytes(convertbits(data, 5, 8, False))
-            return SuiKeyPair.from_b64(b.decode())
+            if hrp != "suiprivkey" or not data:
+                raise ValueError("HRP hoặc data sai")
+
+            # 5-bit → 8-bit bytes
+            key_bytes = bytes(convertbits(data, 5, 8, False))
+            # ✨ chuyển sang Base64 ascii
+            key_b64   = base64.b64encode(key_bytes).decode("ascii")
+
+            return SuiKeyPair.from_b64(key_b64)
         except Exception as exc:
             raise RuntimeError("Không decode được khoá Bech32") from exc
+
+    # API mới của pysui (0.85+)
     if hasattr(SuiKeyPair, "from_any"):
         return SuiKeyPair.from_any(raw)
-    return SuiKeyPair.from_b64(raw)
 
-keypair = load_keypair(SUI_KEY_STRING)
+    # Mặc định: raw đã là Base64
+    return SuiKeyPair.from_b64(raw)
 
 # ─── sui client ────────────────────────────────────────────────────
 cfg    = SuiConfig.user_config(rpc_url=RPC_URL, prv_keys=[SUI_KEY_STRING])
