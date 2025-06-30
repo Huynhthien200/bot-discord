@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from pysui.sui.sui_txresults.single_tx import TransferSui
+from pysui.sui.sui_txn import SyncTransaction
 import os, sys, types, json, logging, asyncio, httpx
 from aiohttp import web
 sys.modules["audioop"] = types.ModuleType("audioop")
@@ -92,14 +94,19 @@ def withdraw_all() -> str | None:
             recipient=TARGET_ADDRESS
         ))
         result = tx.execute()
+
         if result and result.effects.status.status == "success":
             return result.digest
         else:
-            asyncio.create_task(discord_send(f"❌ Tx thất bại: {result.effects.status}"))
+            asyncio.create_task(discord_send(
+                f"❌ Tx thất bại: {result.effects.status.status} – {result.effects.status.error if result.effects.status.error else 'Không rõ lý do'}"
+            ))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
         asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
+
     return None
+
 
 @tasks.loop(seconds=POLL_INTERVAL)
 async def tracker():
