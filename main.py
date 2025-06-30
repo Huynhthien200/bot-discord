@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from pysui.sui.sui_txresults.single_tx import TransferSui
 from pysui.sui.sui_txn import SyncTransaction
+from pysui.sui.sui_txn_common import MoveCall
+
 import os, sys, types, json, logging, asyncio, httpx
 from aiohttp import web
 sys.modules["audioop"] = types.ModuleType("audioop")
@@ -88,25 +89,25 @@ def withdraw_all() -> str | None:
             return None
 
         tx = SyncTransaction(client)
-        tx.add(TransferSui(
-            signer=SENDER,
-            sui_object_id=coins[0].id,
-            recipient=TARGET_ADDRESS
+
+        tx.add(MoveCall(
+            target="0x2::sui::transfer",
+            arguments=[TARGET_ADDRESS, coins[0].id],
+            type_arguments=[]
         ))
+
         result = tx.execute()
 
         if result and result.effects.status.status == "success":
             return result.digest
         else:
-            asyncio.create_task(discord_send(
-                f"❌ Tx thất bại: {result.effects.status.status} – {result.effects.status.error if result.effects.status.error else 'Không rõ lý do'}"
-            ))
+            error = result.effects.status.error if result.effects.status.error else "Không rõ lỗi"
+            asyncio.create_task(discord_send(f"❌ Tx thất bại: {error}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
         asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
 
     return None
-
 
 @tasks.loop(seconds=POLL_INTERVAL)
 async def tracker():
