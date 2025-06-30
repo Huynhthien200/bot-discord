@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-from pysui.sui.sui_txn import SyncTransaction
-from pysui.sui.sui_txn_common import MoveCall
-
 import os, sys, types, json, logging, asyncio, httpx
 from aiohttp import web
 sys.modules["audioop"] = types.ModuleType("audioop")
@@ -11,8 +8,8 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.sui.sui_txresults.single_tx import TransferSui
-from pysui.sui.sui_txn import SyncTransaction
+from pysui.sui.sui_txn import ProgrammableTransactionBlock
+from pysui.sui.sui_txresults.common import SuiRpcResult
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -85,28 +82,22 @@ def withdraw_all() -> str | None:
     try:
         coins = client.get_gas(address=SENDER)
         if not coins:
-            asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin khả dụng để rút."))
+            asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin để rút"))
             return None
 
-        tx = SyncTransaction(client)
+        gas_id = coins[0].id
+        ptb = ProgrammableTransactionBlock(client)
+        ptb.transfer_sui(recipient=TARGET_ADDRESS, amount=None)
+        tx_result: SuiRpcResult = ptb.execute(signer=keypair, gas=gas_id)
 
-        tx.add(MoveCall(
-            target="0x2::sui::transfer",
-            arguments=[TARGET_ADDRESS, coins[0].id],
-            type_arguments=[]
-        ))
-
-        result = tx.execute()
-
-        if result and result.effects.status.status == "success":
-            return result.digest
+        if tx_result and tx_result.result_data and tx_result.result_data.status.status == "success":
+            return tx_result.tx_digest
         else:
-            error = result.effects.status.error if result.effects.status.error else "Không rõ lỗi"
+            error = tx_result.result_data.status.error if tx_result.result_data.status else "Không rõ lỗi"
             asyncio.create_task(discord_send(f"❌ Tx thất bại: {error}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
         asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
-
     return None
 
 @tasks.loop(seconds=POLL_INTERVAL)
@@ -134,7 +125,7 @@ async def tracker():
 
             if delta > 0 and can_withdraw:
                 if addr != SENDER.lower():
-                    await discord_send(f"⚠️ Không thể rút từ **{name}** vì bot không giữ private key của ví này.")
+                    await discord_send(f"⚠️ Không thể rút từ **{name}** vì bot không giữ private key ví đó.")
                 else:
                     tx = withdraw_all()
                     if tx:
@@ -149,14 +140,11 @@ async def on_ready():
     tracker.start()
     bot.loop.create_task(start_web())
     logging.info("Logged in as %s", bot.user)
-
-    await discord_send(f"🔑 Ví có private key (SENDER): `{SENDER}`\n⚠️ Bot chỉ có thể **rút tiền** từ ví này.")
-
-    watched_list = "\n".join([
+    await discord_send(f"🔑 Ví có private key (SENDER): `{SENDER}`")
+    await discord_send("🛰️ Bot đang theo dõi:\n" + "\n".join([
         f"- {entry['name']}: {entry['address']} {'(Auto-rút)' if entry.get('withdraw') else ''}"
         for entry in WATCHED
-    ])
-    await discord_send(f"🛰️ Bot đang theo dõi:\n{watched_list}")
+    ]))
 
 @bot.command()
 async def ping(ctx):
