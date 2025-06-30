@@ -2,4 +2,4 @@ discord.py
 aiohttp
 httpx
 bech32
-pysui==0.86.0
+pysui==0.85.0
