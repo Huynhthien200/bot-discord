@@ -8,6 +8,8 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
+from pysui.sui.sui_txresults.single_tx import TransferSui
+from pysui.sui.sui_txn import SyncTransaction
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -82,14 +84,18 @@ def withdraw_all() -> str | None:
         if not coins:
             asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin khả dụng để rút."))
             return None
-        resp = client.transfer_sui(
-            signer=keypair,
+
+        tx = SyncTransaction(client)
+        tx.add(TransferSui(
+            signer=SENDER,
             sui_object_id=coins[0].id,
-            recipient=TARGET_ADDRESS,
-            amount=None,
-        )
-        if resp and resp.effects.status.status == "success":
-            return resp.digest
+            recipient=TARGET_ADDRESS
+        ))
+        result = tx.execute()
+        if result and result.effects.status.status == "success":
+            return result.digest
+        else:
+            asyncio.create_task(discord_send(f"❌ Tx thất bại: {result.effects.status}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
         asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
