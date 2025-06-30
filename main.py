@@ -131,11 +131,13 @@ async def on_ready():
     bot.loop.create_task(start_web())
     logging.info("Logged in as %s", bot.user)
 
-    watched_list = "\n".join([
-        f"- {entry['name']}: {entry['address']} {'(Auto-rút)' if entry.get('withdraw') else ''}"
-        for entry in WATCHED
-    ])
-    await discord_send(f"🛰️ Bot đang theo dõi:\n{watched_list}")
+ watched_list = "\n".join([
+    f"- {entry['name']}: {entry['address']} {'(Auto-rút)' if entry.get('withdraw') else ''}"
+    for entry in WATCHED
+])
+sender_info = f"🔑 Ví có private key (SENDER): `{SENDER}`"
+
+await discord_send(f"{sender_info}\n🛰️ Bot đang theo dõi:\n{watched_list}")
 
 @bot.command()
 async def ping(ctx):
