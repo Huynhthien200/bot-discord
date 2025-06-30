@@ -15,7 +15,13 @@ CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY", "")
 TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS", "")
 RPC_URL         = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
-WATCHED         = json.loads(os.getenv("WATCHED_ADDRESSES", "{}"))
+try:
+    with open("watched.json", encoding="utf-8") as f:
+        WATCHED = json.load(f)
+except Exception as e:
+    logging.error("Lỗi đọc watched.json: %s", e)
+    WATCHED = {}
+
 POLL_INTERVAL   = float(os.getenv("POLL_INTERVAL", "1"))
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
