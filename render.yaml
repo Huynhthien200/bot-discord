@@ -18,9 +18,3 @@ services:
         value: https://rpc-mainnet.suiscan.xyz/
       - key: POLL_INTERVAL
         value: "1"
-      - key: WATCHED_ADDRESSES
-        value: >
-          {
-            "Ví Neuter": "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
-            "Khiêm Nguyễn":"0xfb4dd4169b270d767501b142df7b289a3194e72cbadd1e3a2c30118693bde32c"
-          }
