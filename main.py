@@ -64,7 +64,7 @@ async def discord_send(msg: str):
         ch = await bot.fetch_channel(CHANNEL_ID)
         await ch.send(msg)
     except Exception as exc:
-        logging.warning("Failed to send message to Discord: %s", exc)
+        logging.warning("Không gửi Discord: %s", exc)
 
 async def get_balance(addr: str) -> int | None:
     payload = {"jsonrpc": "2.0", "id": 1, "method": "suix_getBalance", "params": [addr]}
@@ -73,13 +73,14 @@ async def get_balance(addr: str) -> int | None:
         r.raise_for_status()
         return int(r.json()["result"]["totalBalance"])
     except Exception as exc:
-        logging.warning("Failed to get balance: %s", exc)
+        logging.warning("RPC lỗi: %s", exc)
         return None
 
 def withdraw_all() -> str | None:
     try:
         coins = client.get_gas(address=SENDER)
         if not coins:
+            asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin khả dụng để rút."))
             return None
         resp = client.transfer_sui(
             signer=keypair,
@@ -90,7 +91,8 @@ def withdraw_all() -> str | None:
         if resp and resp.effects.status.status == "success":
             return resp.digest
     except Exception as exc:
-        logging.error("Withdraw failed: %s", exc)
+        logging.error("Withdraw thất bại: %s", exc)
+        asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
     return None
 
 @tasks.loop(seconds=POLL_INTERVAL)
@@ -117,11 +119,14 @@ async def tracker():
             )
 
             if delta > 0 and can_withdraw:
-                tx = withdraw_all()
-                if tx:
-                    await discord_send(
-                        f"💸 Đã rút toàn bộ về `{TARGET_ADDRESS[:10]}...` · Tx `{tx}`"
-                    )
+                if addr != SENDER.lower():
+                    await discord_send(f"⚠️ Không thể rút từ **{name}** vì bot không giữ private key của ví này.")
+                else:
+                    tx = withdraw_all()
+                    if tx:
+                        await discord_send(
+                            f"💸 Đã rút toàn bộ về `{TARGET_ADDRESS[:10]}...` · Tx `{tx}`"
+                        )
 
         balance_cache[addr] = cur
 
@@ -131,13 +136,13 @@ async def on_ready():
     bot.loop.create_task(start_web())
     logging.info("Logged in as %s", bot.user)
 
- watched_list = "\n".join([
-    f"- {entry['name']}: {entry['address']} {'(Auto-rút)' if entry.get('withdraw') else ''}"
-    for entry in WATCHED
-])
-sender_info = f"🔑 Ví có private key (SENDER): `{SENDER}`"
+    await discord_send(f"🔑 Ví có private key (SENDER): `{SENDER}`\n⚠️ Bot chỉ có thể **rút tiền** từ ví này.")
 
-await discord_send(f"{sender_info}\n🛰️ Bot đang theo dõi:\n{watched_list}")
+    watched_list = "\n".join([
+        f"- {entry['name']}: {entry['address']} {'(Auto-rút)' if entry.get('withdraw') else ''}"
+        for entry in WATCHED
+    ])
+    await discord_send(f"🛰️ Bot đang theo dõi:\n{watched_list}")
 
 @bot.command()
 async def ping(ctx):
