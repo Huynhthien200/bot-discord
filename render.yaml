@@ -15,8 +15,12 @@ services:
       - key: SUI_TARGET_ADDRESS
         sync: false
       - key: RPC_URL
-        sync: false
-      - key: WATCHED_ADDRESSES
-        sync: false
+        value: https://rpc-mainnet.suiscan.xyz/
       - key: POLL_INTERVAL
-        sync: false
+        value: "1"
+      - key: WATCHED_ADDRESSES
+        value: >
+          {
+            "Ví Neuter": "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
+            "Ví phụ 1": "0xdef4567890abcdef1234"
+          }
