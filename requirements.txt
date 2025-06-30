@@ -1,5 +1,5 @@
 discord.py
 aiohttp
 httpx
-pysui>=0.85
 bech32
+pysui==0.20.3
