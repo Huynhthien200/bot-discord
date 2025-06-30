@@ -20,7 +20,7 @@ try:
         WATCHED = json.load(f)
 except Exception as e:
     logging.error("Lỗi đọc watched.json: %s", e)
-    WATCHED = {}
+    WATCHED = []
 
 POLL_INTERVAL   = float(os.getenv("POLL_INTERVAL", "1"))
 
