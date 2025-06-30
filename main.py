@@ -28,33 +28,27 @@ from bech32 import bech32_decode, convertbits      # pip install bech32
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
 
-    # Bech32 private-key (suiprivkey…)
     if raw.startswith("suiprivkey"):
         try:
             hrp, data = bech32_decode(raw)
             if hrp != "suiprivkey" or not data:
                 raise ValueError("HRP hoặc data sai")
-
-            # 5-bit → 8-bit bytes
             key_bytes = bytes(convertbits(data, 5, 8, False))
-            # ✨ chuyển sang Base64 ascii
             key_b64   = base64.b64encode(key_bytes).decode("ascii")
-
             return SuiKeyPair.from_b64(key_b64)
         except Exception as exc:
             raise RuntimeError("Không decode được khoá Bech32") from exc
 
-    # API mới của pysui (0.85+)
     if hasattr(SuiKeyPair, "from_any"):
         return SuiKeyPair.from_any(raw)
 
-    # Mặc định: raw đã là Base64
     return SuiKeyPair.from_b64(raw)
 
 # ─── sui client ────────────────────────────────────────────────────
-cfg    = SuiConfig.user_config(rpc_url=RPC_URL, prv_keys=[SUI_KEY_STRING])
-client = SyncClient(cfg)
-SENDER = str(cfg.active_address)
+keypair = load_keypair(SUI_KEY_STRING)
+cfg     = SuiConfig.user_config(rpc_url=RPC_URL, prv_keys=[SUI_KEY_STRING])
+client  = SyncClient(cfg)
+SENDER  = str(cfg.active_address)
 
 # ─── discord ───────────────────────────────────────────────────────
 intents = discord.Intents.default()
@@ -127,11 +121,11 @@ async def on_ready():
     logging.info("Logged in as %s", bot.user)
 
 @bot.command()
-async def ping(ctx):  # noqa: D103
+async def ping(ctx):
     await ctx.send("✅ Pong")
 
 @bot.command()
-async def balances(ctx):  # noqa: D103
+async def balances(ctx):
     lines = []
     for n, a in WATCHED.items():
         b = await get_balance(a)
