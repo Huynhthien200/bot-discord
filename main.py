@@ -8,7 +8,6 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.sui.sui_txresults.single_tx import TransferObject
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -77,29 +76,14 @@ async def get_balance(addr: str) -> int | None:
         logging.warning("RPC lỗi: %s", exc)
         return None
 
-def get_sui_coin() -> str | None:
-    try:
-        coins = client.get_coins(owner=SENDER, coin_type="0x2::sui::SUI")
-        if coins and coins.data:
-            return coins.data[0].coin_object_id
-    except Exception as e:
-        logging.error("Lỗi lấy coin SUI: %s", e)
-    return None
-
 def withdraw_all() -> str | None:
     try:
-        sui_id = get_sui_coin()
-        if not sui_id:
-            asyncio.create_task(discord_send("⚠️ Không tìm thấy SUI để rút"))
-            return None
-
-        result: TransferObject = client.transfer_object(
+        result = client.transfer_sui(
             signer=keypair,
-            input_object=sui_id,
             recipient=TARGET_ADDRESS,
-            gas=sui_id
+            from_coin=None,
+            amount=None  # None = chuyển hết
         )
-
         if result and result.result_data.status.status == "success":
             return result.result_data.tx_digest
         else:
