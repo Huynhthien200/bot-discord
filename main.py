@@ -8,6 +8,8 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
+from pysui.txn.txn_builder import TransactionBuilder
+from pysui.sui.sui_txresults.common import SuiRpcResult
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -78,12 +80,10 @@ async def get_balance(addr: str) -> int | None:
 
 def withdraw_all() -> str | None:
     try:
-        result = client.transfer_sui(
-            signer=keypair,
-            recipient=TARGET_ADDRESS,
-            from_coin=None,
-            amount=None  # None = chuyển hết
-        )
+        tx = TransactionBuilder(client)
+        tx.transfer_sui(recipient=TARGET_ADDRESS)
+        result: SuiRpcResult = tx.execute(signer=keypair)
+
         if result and result.result_data.status.status == "success":
             return result.result_data.tx_digest
         else:
