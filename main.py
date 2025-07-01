@@ -23,7 +23,7 @@ if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
 cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
 sender = str(cfg.active_address)
-keypair = SuiKeyPair.from_b64(SUI_PRIVATE_KEY)
+keypair = SuiKeyPair.from_keystring(SUI_PRIVATE_KEY)
 
 # === Discord bot ===
 intents = commands.Intents.default()
