@@ -83,17 +83,18 @@ def withdraw_all() -> str | None:
             asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin để rút"))
             return None
 
-        resp = client.transfer_sui(
+        coin = coins[0]
+        tx = client.transfer_object(
             signer=keypair,
+            input_object=coin.id,
             recipient=TARGET_ADDRESS,
-            amount=None,
-            sui_object_id=coins[0].id
+            gas=coin.id
         )
 
-        if resp and resp.effects.status.status == "success":
-            return resp.digest
+        if tx and tx.effects.status.status == "success":
+            return tx.digest
         else:
-            error = resp.effects.status.error if resp.effects.status else "Không rõ lỗi"
+            error = tx.effects.status.error if tx.effects.status else "Không rõ lỗi"
             asyncio.create_task(discord_send(f"❌ Tx thất bại: {error}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
