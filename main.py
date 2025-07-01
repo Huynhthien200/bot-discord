@@ -8,8 +8,8 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-# Không cần SuiRpcResult nữa ở phiên bản >=0.85.0
-
+from pysui.txn import SyncTransactionBuilder
+from pysui.sui.sui_types import SuiAddress, SuiInteger
 
 # ─── ENV CONFIG ───────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -78,18 +78,31 @@ async def get_balance(addr: str) -> int | None:
         logging.warning("RPC lỗi: %s", exc)
         return None
 
-def withdraw_all() -> str | None:
+def withdraw_all():
     try:
-        result = client.transfer_sui(
-            signer=keypair,
-            recipient=TARGET_ADDRESS,
-            from_coin=None,
-            amount=None  # chuyển toàn bộ (trừ gas)
+        builder = SyncTransactionBuilder(client)
+
+        # Lấy coin để làm gas + rút toàn bộ
+        coins = builder.get_gas_objects(SENDER)
+        if not coins:
+            asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin để rút"))
+            return None
+
+        gas_object = coins[0]
+
+        # Gửi toàn bộ SUI về ví đích
+        builder.transfer_sui(
+            recipient=SuiAddress(TARGET_ADDRESS),
+            from_address=SuiAddress(SENDER),
+            gas=gas_object,
+            amount=SuiInteger(0)  # 0 == tất cả
         )
-        if result and result.result_data.status.status == "success":
-            return result.result_data.tx_digest
+
+        tx_result = builder.sync_sign_and_execute(signer=keypair)
+        if tx_result.is_ok():
+            return tx_result.result_data.tx_digest
         else:
-            error = result.result_data.status.error if result.result_data.status else "Không rõ lỗi"
+            error = tx_result.result_string
             asyncio.create_task(discord_send(f"❌ Tx thất bại: {error}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
