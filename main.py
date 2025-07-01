@@ -8,7 +8,8 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.sui.sui_txresults.common import SuiRpcResult
+# Không cần SuiRpcResult nữa ở phiên bản >=0.85.0
+
 
 # ─── ENV CONFIG ───────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
