@@ -8,9 +8,9 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.txn.txn_builder import TransactionBuilder
+from pysui.sui.sui_txresults.common import SuiRpcResult
 
-# ─── ENV CONFIG ───────────────────────────────────────────────────
+# ─── ENV CONFIG ───────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
 CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY", "")
@@ -21,7 +21,7 @@ POLL_INTERVAL   = float(os.getenv("POLL_INTERVAL", "1"))
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
     raise RuntimeError("Thiếu biến môi trường bắt buộc")
 
-# ─── LOAD WATCHED ADDRESSES ───────────────────────────────────────
+# ─── LOAD WATCHED JSON ───────────────────────────────────────
 try:
     with open("watched.json", encoding="utf-8") as f:
         WATCHED = json.load(f)
@@ -29,7 +29,7 @@ except Exception as e:
     logging.error("Lỗi đọc watched.json: %s", e)
     WATCHED = []
 
-# ─── LOAD SUI KEY ─────────────────────────────────────────────────
+# ─── LOAD PRIVATE KEY ────────────────────────────────────────
 import base64
 from bech32 import bech32_decode, convertbits
 
@@ -46,13 +46,13 @@ def load_keypair(raw: str) -> SuiKeyPair:
         return SuiKeyPair.from_any(raw)
     return SuiKeyPair.from_b64(raw)
 
-# ─── INIT SUI CLIENT ──────────────────────────────────────────────
+# ─── INIT CLIENT ─────────────────────────────────────────────
 keypair = load_keypair(SUI_KEY_STRING)
 cfg = SuiConfig.user_config(rpc_url=RPC_URL, prv_keys=[SUI_KEY_STRING])
 client = SyncClient(cfg)
 SENDER = str(cfg.active_address)
 
-# ─── DISCORD SETUP ────────────────────────────────────────────────
+# ─── DISCORD BOT SETUP ───────────────────────────────────────
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
@@ -79,10 +79,12 @@ async def get_balance(addr: str) -> int | None:
 
 def withdraw_all() -> str | None:
     try:
-        tx = TransactionBuilder(client)
-        tx.transfer_sui(recipient=TARGET_ADDRESS)
-        result = tx.execute(signer=keypair)
-
+        result = client.transfer_sui(
+            signer=keypair,
+            recipient=TARGET_ADDRESS,
+            from_coin=None,
+            amount=None  # chuyển toàn bộ (trừ gas)
+        )
         if result and result.result_data.status.status == "success":
             return result.result_data.tx_digest
         else:
@@ -93,6 +95,7 @@ def withdraw_all() -> str | None:
         asyncio.create_task(discord_send(f"❌ Withdraw lỗi: {exc}"))
     return None
 
+# ─── TRACKER TASK ────────────────────────────────────────────
 @tasks.loop(seconds=POLL_INTERVAL)
 async def tracker():
     for entry in WATCHED:
@@ -111,7 +114,6 @@ async def tracker():
         if prev is not None and cur != prev:
             delta = (cur - prev) / 1e9
             arrow = "🟢" if delta > 0 else "🔴"
-
             await discord_send(
                 f"💼 **{name}** {arrow} thay đổi **{abs(delta):.4f} SUI** ({prev/1e9:.4f} → {cur/1e9:.4f})"
             )
@@ -128,6 +130,7 @@ async def tracker():
 
         balance_cache[addr] = cur
 
+# ─── BOT EVENTS ───────────────────────────────────────────────
 @bot.event
 async def on_ready():
     tracker.start()
@@ -154,6 +157,7 @@ async def balances(ctx):
             lines.append(f"{name}: {bal/1e9:.4f} SUI")
     await ctx.send("\n".join(lines) if lines else "RPC lỗi")
 
+# ─── AIOHTTP SERVER (KEEPALIVE) ───────────────────────────────
 async def handle(_):
     return web.Response(text="OK")
 
@@ -165,6 +169,7 @@ async def start_web():
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
     await site.start()
 
+# ─── START BOT ────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
     bot.run(DISCORD_TOKEN)
