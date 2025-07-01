@@ -8,7 +8,7 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.sui.sui_txn import ProgrammableTransactionBlock
+from pysui.txn.pst import ProgrammableTransactionBlock
 from pysui.sui.sui_txresults.common import SuiRpcResult
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
@@ -86,9 +86,12 @@ def withdraw_all() -> str | None:
             return None
 
         gas_id = coins[0].id
-        ptb = ProgrammableTransactionBlock(client)
-        ptb.transfer_sui(recipient=TARGET_ADDRESS, amount=None)
-        tx_result: SuiRpcResult = ptb.execute(signer=keypair, gas=gas_id)
+
+        ptb = ProgrammableTransactionBlock()
+        ptb.transfer_sui(recipient=TARGET_ADDRESS)
+
+        # Gửi transaction
+        tx_result = client.execute_ptb(ptb=ptb, signer=keypair, gas=gas_id)
 
         if tx_result and tx_result.result_data and tx_result.result_data.status.status == "success":
             return tx_result.tx_digest
