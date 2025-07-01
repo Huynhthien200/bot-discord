@@ -1,137 +1,97 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-import os, json, logging, asyncio, base64
-import discord
+import os
+import logging
+import asyncio
 from discord.ext import commands, tasks
-from aiohttp import web
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
+from aiohttp import web
 
-# ─── ENVIRONMENT VARIABLES ───
-DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
-CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_KEY_STRING  = os.getenv("SUI_PRIVATE_KEY", "")
-TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS", "")
-RPC_URL         = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
-POLL_INTERVAL   = float(os.getenv("POLL_INTERVAL", "5"))
+# === Logging setup ===
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# ─── CHECK ENV ───
-if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_KEY_STRING, TARGET_ADDRESS]):
-    raise RuntimeError("⚠️ Thiếu biến môi trường bắt buộc")
+# === Config from environment ===
+DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
+TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
+RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 
-# ─── LOAD KEYPAIR ───
-from bech32 import bech32_decode, convertbits
-def load_keypair(raw: str) -> SuiKeyPair:
-    raw = raw.strip()
-    if raw.startswith("suiprivkey"):
-        hrp, data = bech32_decode(raw)
-        if hrp != "suiprivkey" or not data:
-            raise ValueError("Invalid suiprivkey")
-        key_bytes = bytes(convertbits(data, 5, 8, False))
-        key_b64 = base64.b64encode(key_bytes).decode("ascii")
-        return SuiKeyPair.from_b64(key_b64)
-    return SuiKeyPair.from_any(raw)
+if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
+    raise RuntimeError("Thiếu biến môi trường!")
 
-# ─── INIT CLIENT ───
-keypair = load_keypair(SUI_KEY_STRING)
-cfg = SuiConfig.user_config(prv_keys=[SUI_KEY_STRING], rpc_url=RPC_URL)
+# === Sui client ===
+cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
-SENDER = str(cfg.active_address)
+sender = str(cfg.active_address)
+keypair = SuiKeyPair.from_b64(SUI_PRIVATE_KEY)
 
-# ─── DISCORD SETUP ───
-intents = discord.Intents.default()
+# === Discord bot ===
+intents = commands.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
-balance_cache = {}
 
-# ─── UTILS ───
+# === Get balance via get_all_coins ===
 def get_balance(address: str) -> int:
     try:
-        result = client.get_balance(address=address)
-        return int(result.total_balance)
+        result = client.get_all_coins(address=address)
+        total = sum(int(coin.balance) for coin in result.data)
+        return total
     except Exception as e:
         logging.error("RPC lỗi khi lấy số dư: %s", e)
         return -1
 
+# === Withdraw full balance ===
 def withdraw_all():
     try:
-        gas_objects = client.gas_objects_owned_by_address(SENDER)
-        if not gas_objects:
-            logging.warning("⚠️ Không tìm thấy gas coin")
+        coins = client.get_gas(address=sender)
+        if not coins:
+            logging.warning("Không tìm thấy gas để rút")
             return None
 
-        gas_id = gas_objects[0].id
-        txb = client.transfer_sui(
-            signer=keypair,
-            recipient=TARGET_ADDRESS,
-            gas=gas_id,
-            amount=None  # None = transfer toàn bộ trừ gas
-        )
-        if txb and txb.status == "success":
-            return txb.digest
-        else:
-            err = txb.error if txb else "Không rõ lỗi"
-            logging.error("❌ Tx thất bại: %s", err)
+        gas_object = coins[0]
+        amount = get_balance(sender)
+        if amount <= 0:
             return None
+
+        ptb = client.transfer_sui(signer=keypair, recipient=TARGET_ADDRESS, amount=amount, gas_object=gas_object.object_id)
+        tx_result = ptb.result_data
+        if tx_result and tx_result.status and tx_result.status.status == "success":
+            return ptb.tx_digest
+        else:
+            logging.error(f"❌ Tx thất bại: {tx_result.status.error if tx_result.status else 'Không rõ lỗi'}")
     except Exception as e:
         logging.error("Withdraw thất bại: %s", e)
-        return None
+    return None
 
-async def discord_send(msg: str):
-    try:
+# === Track and withdraw if balance > 0 ===
+@tasks.loop(seconds=10)
+async def monitor():
+    bal = get_balance(sender)
+    if bal > 0:
+        tx = withdraw_all()
         ch = await bot.fetch_channel(CHANNEL_ID)
-        await ch.send(msg)
-    except Exception as e:
-        logging.warning("Lỗi gửi Discord: %s", e)
+        if tx:
+            await ch.send(f"💸 Đã tự động rút `{bal/1e9:.4f} SUI` về ví `{TARGET_ADDRESS[:10]}...` · Tx: `{tx}`")
+        else:
+            await ch.send("⚠️ Không thể rút, kiểm tra log!")
 
-# ─── TRACKER ───
-@tasks.loop(seconds=POLL_INTERVAL)
-async def tracker():
-    addr = SENDER.lower()
-    cur = get_balance(addr)
-    if cur < 0:
-        return
-
-    prev = balance_cache.get(addr, 0)
-    if cur != prev:
-        await discord_send(f"💼 Số dư thay đổi: {prev/1e9:.4f} → {cur/1e9:.4f} SUI")
-
-        if cur > 0:
-            tx = withdraw_all()
-            if tx:
-                await discord_send(f"💸 Đã rút toàn bộ về `{TARGET_ADDRESS[:10]}...` · Tx `{tx}`")
-
-    balance_cache[addr] = cur
-
-# ─── BOT EVENTS ───
-@bot.event
-async def on_ready():
-    await discord_send(f"🟢 Bot đã sẵn sàng - Đang theo dõi ví `{SENDER}`")
-    tracker.start()
-    bot.loop.create_task(start_web())
-
-@bot.command()
-async def ping(ctx):
-    await ctx.send("✅ Pong")
-
-@bot.command()
-async def balance(ctx):
-    bal = get_balance(SENDER)
-    await ctx.send(f"Số dư: {bal/1e9:.4f} SUI" if bal >= 0 else "❌ RPC lỗi")
-
-# ─── HTTP SERVER ───
-async def handle(_):
-    return web.Response(text="OK")
+# === Aiohttp web server (keepalive for Railway) ===
+async def handle(request):
+    return web.Response(text="Bot is running.")
 
 async def start_web():
     app = web.Application()
     app.router.add_get("/", handle)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", 8080)))
     await site.start()
 
-# ─── MAIN ───
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
-    bot.run(DISCORD_TOKEN)
+@bot.event
+async def on_ready():
+    logging.info("Bot đã sẵn sàng.")
+    await bot.get_channel(CHANNEL_ID).send(f"🟢 Bot đã khởi động và đang theo dõi ví: `{sender}`")
+    monitor.start()
+    bot.loop.create_task(start_web())
+
+bot.run(DISCORD_TOKEN)
