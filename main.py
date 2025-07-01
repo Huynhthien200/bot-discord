@@ -8,8 +8,7 @@ import discord
 from discord.ext import commands, tasks
 from pysui import SyncClient, SuiConfig
 from pysui.sui.sui_crypto import SuiKeyPair
-from pysui.txn.pst import ProgrammableTransactionBlock
-from pysui.sui.sui_txresults.common import SuiRpcResult
+from pysui.sui.sui_txresults.single_tx import TransferObject
 
 # ─── ENV CONFIG ───────────────────────────────────────────────────
 DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN", "")
@@ -85,18 +84,19 @@ def withdraw_all() -> str | None:
             asyncio.create_task(discord_send("⚠️ Không tìm thấy gas coin để rút"))
             return None
 
-        gas_id = coins[0].id
+        gas_coin = coins[0]
+        transfer = TransferObject(
+            signer=keypair,
+            object_id=gas_coin.id,
+            recipient=TARGET_ADDRESS,
+            amount=None
+        )
+        result = client.transfer_object(transfer)
 
-        ptb = ProgrammableTransactionBlock()
-        ptb.transfer_sui(recipient=TARGET_ADDRESS)
-
-        # Gửi transaction
-        tx_result = client.execute_ptb(ptb=ptb, signer=keypair, gas=gas_id)
-
-        if tx_result and tx_result.result_data and tx_result.result_data.status.status == "success":
-            return tx_result.tx_digest
+        if result and result.effects.status.status == "success":
+            return result.digest
         else:
-            error = tx_result.result_data.status.error if tx_result.result_data.status else "Không rõ lỗi"
+            error = result.effects.status.error if result.effects.status else "Không rõ lỗi"
             asyncio.create_task(discord_send(f"❌ Tx thất bại: {error}"))
     except Exception as exc:
         logging.error("Withdraw thất bại: %s", exc)
@@ -132,9 +132,7 @@ async def tracker():
                 else:
                     tx = withdraw_all()
                     if tx:
-                        await discord_send(
-                            f"💸 Đã rút toàn bộ về `{TARGET_ADDRESS[:10]}...` · Tx `{tx}`"
-                        )
+                        await discord_send(f"💸 Đã rút toàn bộ về `{TARGET_ADDRESS[:10]}...` · Tx `{tx}`")
 
         balance_cache[addr] = cur
 
