@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import discord  # Thêm dòng này
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
@@ -48,7 +49,7 @@ except Exception as e:
     raise
 
 # === Discord Bot ===
-intents = discord.Intents.default()  # Thay commands.Intents bằng discord.Intents
+intents = discord.Intents.default()  # Đã sửa thành công
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
@@ -156,5 +157,4 @@ async def on_ready():
     await start_web_server()
 
 if __name__ == "__main__":
-    import discord  # Thêm import này ở đầu file nếu chưa có
     bot.run(DISCORD_TOKEN)
