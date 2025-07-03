@@ -48,7 +48,7 @@ except Exception as e:
     raise
 
 # === Discord Bot ===
-intents = discord.Intents.default()  # Sửa ở đây - thay đổi từ commands.Intents
+intents = discord.Intents.default()  # Thay commands.Intents bằng discord.Intents
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
