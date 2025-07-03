@@ -8,9 +8,10 @@ import httpx
 from discord.ext import commands, tasks
 from aiohttp import web
 
-from pysui import SuiConfig, SyncClient, SyncTransaction
+from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_crypto import SuiKeyPair
 from pysui.sui.sui_types import SuiAddress
+from pysui.sui.sui_txn import SyncTransaction   # ← import SyncTransaction here
 from bech32 import bech32_decode, convertbits
 import base64
 
@@ -31,11 +32,11 @@ TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường!")
 
-# Wrap TARGET_ADDRESS
+# === Wrap target into SuiAddress ===
 try:
     RECIPIENT = SuiAddress(TARGET_ADDRESS)
 except Exception as e:
-    raise RuntimeError(f"⚠️ TARGET_ADDRESS không hợp lệ: {e}")
+    raise RuntimeError(f"TARGET_ADDRESS không hợp lệ: {e}")
 
 # === Load watched.json ===
 try:
@@ -46,7 +47,7 @@ except Exception as e:
     logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === Helper: load keypair ===
+# === Helper: load keypair (Bech32 or Base64) ===
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
     if raw.startswith("suiprivkey"):
@@ -63,55 +64,59 @@ cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
 keypair = load_keypair(SUI_PRIVATE_KEY)
 withdraw_signer = str(cfg.active_address)
-logging.info(f"SuiConfig active address (rút): {withdraw_signer}")
+logging.info(f"Địa chỉ dùng để rút: {withdraw_signer}")
 
-# === HTTP client ===
+# === HTTP client for JSON-RPC balance ===
 http_client = httpx.AsyncClient(timeout=10)
 
 async def get_sui_balance(addr: str) -> float:
     try:
-        payload = {"jsonrpc":"2.0","id":1,"method":"suix_getBalance","params":[addr]}
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "suix_getBalance",
+            "params": [addr]
+        }
         r = await http_client.post(RPC_URL, json=payload)
         r.raise_for_status()
         total = int(r.json()["result"]["totalBalance"])
-        return total/1e9
+        return total / 1e9
     except Exception as e:
         logging.error(f"Lỗi RPC lấy balance {addr[:8]}…: {e}")
         return 0.0
 
 async def withdraw_sui(from_addr: str) -> str | None:
     if from_addr != withdraw_signer:
-        logging.warning(f"⚠️ Không thể rút từ ví {from_addr}")
+        logging.warning(f"Không thể rút từ ví {from_addr}")
         return None
 
     bal = await get_sui_balance(from_addr)
     if bal <= 0:
         return None
 
-    # Lấy gas-coin list
-    gas_res  = client.get_gas(address=from_addr)            # sync call ok
+    # Lấy gas object
+    gas_res = client.get_gas(address=from_addr)
     gas_list = gas_res.result_data.data
     if not gas_list:
-        logging.warning(f"⚠️ Không tìm thấy gas object cho {from_addr}")
+        logging.warning("Không tìm thấy gas object")
         return None
 
     def build_and_send():
-        tx = SyncTransaction(client)
+        tx = SyncTransaction(client)       # sender mặc định là active_address
         tx.transfer_sui(
-            signer=keypair,
-            sui_object_id=gas_list[0].object_id,
+            from_coin=gas_list[0].object_id,
             recipient=RECIPIENT,
-            amount=int(bal*1e9)
+            amount=int(bal * 1e9)
         )
-        res = tx.execute()
-        return res.tx_digest
+        result = tx.execute(signer=keypair)
+        return result.tx_digest
 
     try:
         digest = await asyncio.to_thread(build_and_send)
-        logging.info(f"💸 Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:8]}… · Tx: {digest}")
+        logging.info(f"Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:8]}… · Tx: {digest}")
         return digest
     except Exception as e:
-        logging.error(f"❌ Lỗi khi rút tiền: {e}")
+        logging.error(f"Lỗi khi rút tiền: {e}")
         return None
 
 # === Discord setup ===
@@ -133,17 +138,20 @@ async def monitor():
         prev = last_balances.get(addr)
 
         if prev is not None and bal != prev:
-            emoji = "🔼" if bal>prev else "🔽"
+            emoji = "🔼" if bal > prev else "🔽"
             await bot.get_channel(CHANNEL_ID).send(
                 f"**{name}** ({safe(addr)})\n{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
             )
         last_balances[addr] = bal
 
-        if w.get("withdraw", False) and bal>0:
+        if w.get("withdraw", False) and bal > 0:
             tx = await withdraw_sui(addr)
             if tx:
                 await bot.get_channel(CHANNEL_ID).send(
-                    f"💸 **Rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
+                    f"💸 **Đã rút tự động**\n"
+                    f"Ví: {name}\n"
+                    f"Số dư: `{bal:.6f} SUI`\n"
+                    f"Tx: `{tx}`"
                 )
 
 @bot.command()
@@ -160,7 +168,7 @@ async def start_web():
     app.router.add_get("/", health)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner,"0.0.0.0",int(os.getenv("PORT","8080")))
+    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
     await site.start()
 
 @bot.event
