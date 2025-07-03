@@ -4,12 +4,13 @@ import logging
 import asyncio
 import discord
 import httpx
+
 from discord.ext import commands, tasks
 from aiohttp import web
-from pysui import SuiConfig, SyncClient
+
+from pysui import SuiConfig, SyncClient, SyncTransaction
 from pysui.sui.sui_crypto import SuiKeyPair
 from pysui.sui.sui_types import SuiAddress
-from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from bech32 import bech32_decode, convertbits
 import base64
 
@@ -17,10 +18,7 @@ import base64
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.FileHandler("sui_bot.log"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler("sui_bot.log"), logging.StreamHandler()]
 )
 
 # === Env vars ===
@@ -33,7 +31,7 @@ TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường!")
 
-# Wrap TARGET_ADDRESS into SuiAddress once
+# Wrap TARGET_ADDRESS
 try:
     RECIPIENT = SuiAddress(TARGET_ADDRESS)
 except Exception as e:
@@ -48,7 +46,7 @@ except Exception as e:
     logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === Helper: load SuiKeyPair from Bech32 or Base64 ===
+# === Helper: load keypair ===
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
     if raw.startswith("suiprivkey"):
@@ -67,28 +65,21 @@ keypair = load_keypair(SUI_PRIVATE_KEY)
 withdraw_signer = str(cfg.active_address)
 logging.info(f"SuiConfig active address (rút): {withdraw_signer}")
 
-# === HTTP client for JSON-RPC ===
+# === HTTP client ===
 http_client = httpx.AsyncClient(timeout=10)
 
 async def get_sui_balance(addr: str) -> float:
-    """Gọi suix_getBalance, trả về float SUI"""
     try:
-        payload = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "suix_getBalance",
-            "params": [addr]
-        }
+        payload = {"jsonrpc":"2.0","id":1,"method":"suix_getBalance","params":[addr]}
         r = await http_client.post(RPC_URL, json=payload)
         r.raise_for_status()
         total = int(r.json()["result"]["totalBalance"])
-        return total / 1e9
+        return total/1e9
     except Exception as e:
         logging.error(f"Lỗi RPC lấy balance {addr[:8]}…: {e}")
         return 0.0
 
 async def withdraw_sui(from_addr: str) -> str | None:
-    """Rút toàn bộ SUI từ from_addr về RECIPIENT"""
     if from_addr != withdraw_signer:
         logging.warning(f"⚠️ Không thể rút từ ví {from_addr}")
         return None
@@ -97,26 +88,27 @@ async def withdraw_sui(from_addr: str) -> str | None:
     if bal <= 0:
         return None
 
-    # Lấy gas object
-    gas_res = await asyncio.to_thread(client.get_gas, address=from_addr)
+    # Lấy gas-coin list
+    gas_res  = client.get_gas(address=from_addr)            # sync call ok
     gas_list = gas_res.result_data.data
     if not gas_list:
         logging.warning(f"⚠️ Không tìm thấy gas object cho {from_addr}")
         return None
 
     def build_and_send():
-        tx = SuiTransaction(client=client, initial_sender=from_addr)
+        tx = SyncTransaction(client)
         tx.transfer_sui(
+            signer=keypair,
+            sui_object_id=gas_list[0].object_id,
             recipient=RECIPIENT,
-            from_coin=gas_list[0].object_id,
-            amount=int(bal * 1e9)
+            amount=int(bal*1e9)
         )
-        result = tx.execute()
-        return result.tx_digest
+        res = tx.execute()
+        return res.tx_digest
 
     try:
         digest = await asyncio.to_thread(build_and_send)
-        logging.info(f"💸 Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:10]}… · Tx: {digest}")
+        logging.info(f"💸 Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:8]}… · Tx: {digest}")
         return digest
     except Exception as e:
         logging.error(f"❌ Lỗi khi rút tiền: {e}")
@@ -138,28 +130,26 @@ async def monitor():
         addr = w["address"]
         name = w.get("name", safe(addr))
         bal  = await get_sui_balance(addr)
-        prev = last_balances.get(addr, None)
+        prev = last_balances.get(addr)
 
-        # Gửi thông báo khi số dư thay đổi
         if prev is not None and bal != prev:
-            emoji = "🔼" if bal > prev else "🔽"
+            emoji = "🔼" if bal>prev else "🔽"
             await bot.get_channel(CHANNEL_ID).send(
                 f"**{name}** ({safe(addr)})\n{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
             )
         last_balances[addr] = bal
 
-        # Nếu withdraw=true thì tự động rút
-        if w.get("withdraw", False) and bal > 0:
+        if w.get("withdraw", False) and bal>0:
             tx = await withdraw_sui(addr)
             if tx:
                 await bot.get_channel(CHANNEL_ID).send(
-                    f"💸 **Đã rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
+                    f"💸 **Rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
                 )
 
 @bot.command()
 async def xemtokens(ctx, address: str):
     bal = await get_sui_balance(address)
-    await ctx.send(f"Số dư của `{address}`: `{bal:.6f} SUI`")
+    await ctx.send(f"Số dư `{address}`: `{bal:.6f} SUI`")
 
 # === Keep-alive server for Railway ===
 async def health(request):
@@ -170,13 +160,13 @@ async def start_web():
     app.router.add_get("/", health)
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT","8080")))
+    site = web.TCPSite(runner,"0.0.0.0",int(os.getenv("PORT","8080")))
     await site.start()
 
 @bot.event
 async def on_ready():
-    logging.info(f"Bot started. Monitoring {len(WATCHED)} wallets.")
-    await bot.get_channel(CHANNEL_ID).send(f"🟢 Bot đã khởi động, theo dõi {len(WATCHED)} ví.")
+    logging.info(f"Bot đã sẵn sàng. Theo dõi {len(WATCHED)} ví.")
+    await bot.get_channel(CHANNEL_ID).send(f"🟢 Bot khởi động, theo dõi {len(WATCHED)} ví.")
     monitor.start()
     bot.loop.create_task(start_web())
 
