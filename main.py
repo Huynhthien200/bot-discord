@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import asyncio
-import discord  # Import chính thức module discord
+import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
@@ -60,15 +60,19 @@ def safe_address(addr: str) -> str:
     """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI với cơ chế retry"""
-    try:
-        res = client.get_all_coins(address=addr)
-        return sum(int(c.balance) / 1_000_000_000 for c in res.data)
-    except Exception as e:
-        logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
-        raise
+    """Lấy số dư SUI với cơ chế retry thủ công"""
+    retries = 3
+    for attempt in range(retries):
+        try:
+            res = client.get_all_coins(address=addr)
+            return sum(int(c.balance) / 1_000_000_000 for c in res.data)
+        except Exception as e:
+            if attempt == retries - 1:
+                logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
+                raise
+            logging.warning(f"Thử lại lần {attempt + 1}...")
+            asyncio.sleep(2)
 
 async def withdraw_sui(from_addr: str) -> str | None:
     """Rút toàn bộ SUI về ví mục tiêu"""
@@ -97,7 +101,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
         logging.error(f"❌ Lỗi khi rút từ {safe_address(from_addr)}: {e}")
         return None
 
-@tasks.loop(seconds=5)  # Giảm xuống 5s để tránh rate limit
+@tasks.loop(seconds=5)  # Kiểm tra mỗi 5 giây
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
