@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_crypto import SuiKeyPair
+from pysui.sui.sui_types import SuiAddress
 from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from bech32 import bech32_decode, convertbits
 import base64
@@ -31,6 +32,12 @@ TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường!")
+
+# Wrap TARGET_ADDRESS into SuiAddress once
+try:
+    RECIPIENT = SuiAddress(TARGET_ADDRESS)
+except Exception as e:
+    raise RuntimeError(f"⚠️ TARGET_ADDRESS không hợp lệ: {e}")
 
 # === Load watched.json ===
 try:
@@ -81,7 +88,7 @@ async def get_sui_balance(addr: str) -> float:
         return 0.0
 
 async def withdraw_sui(from_addr: str) -> str | None:
-    """Rút toàn bộ SUI từ from_addr về TARGET_ADDRESS bằng SuiTransaction"""
+    """Rút toàn bộ SUI từ from_addr về RECIPIENT"""
     if from_addr != withdraw_signer:
         logging.warning(f"⚠️ Không thể rút từ ví {from_addr}")
         return None
@@ -90,7 +97,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
     if bal <= 0:
         return None
 
-    # Lấy gas object qua client.get_gas
+    # Lấy gas object
     gas_res = await asyncio.to_thread(client.get_gas, address=from_addr)
     gas_list = gas_res.result_data.data
     if not gas_list:
@@ -100,7 +107,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
     def build_and_send():
         tx = SuiTransaction(client=client, initial_sender=from_addr)
         tx.transfer_sui(
-            recipient=TARGET_ADDRESS,
+            recipient=RECIPIENT,
             from_coin=gas_list[0].object_id,
             amount=int(bal * 1e9)
         )
@@ -137,8 +144,7 @@ async def monitor():
         if prev is not None and bal != prev:
             emoji = "🔼" if bal > prev else "🔽"
             await bot.get_channel(CHANNEL_ID).send(
-                f"**{name}** ({safe(addr)})\n"
-                f"{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
+                f"**{name}** ({safe(addr)})\n{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
             )
         last_balances[addr] = bal
 
@@ -147,10 +153,7 @@ async def monitor():
             tx = await withdraw_sui(addr)
             if tx:
                 await bot.get_channel(CHANNEL_ID).send(
-                    f"💸 **Đã rút tự động**\n"
-                    f"Ví: {name}\n"
-                    f"Số dư: `{bal:.6f} SUI`\n"
-                    f"Tx: `{tx}`"
+                    f"💸 **Đã rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
                 )
 
 @bot.command()
