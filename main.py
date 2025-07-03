@@ -1,10 +1,12 @@
 import os
 import json
 import logging
-import discord  # Thêm dòng này
+import asyncio
+import discord  # Import chính thức module discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
+from tenacity import retry, stop_after_attempt, wait_fixed
 
 # === Cấu hình logging ===
 logging.basicConfig(
@@ -49,24 +51,28 @@ except Exception as e:
     raise
 
 # === Discord Bot ===
-intents = discord.Intents.default()  # Đã sửa thành công
+intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_balances = {}
 
 def safe_address(addr: str) -> str:
+    """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
+@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
 def get_sui_balance(addr: str) -> float:
+    """Lấy số dư SUI với cơ chế retry"""
     try:
         res = client.get_all_coins(address=addr)
         return sum(int(c.balance) / 1_000_000_000 for c in res.data)
     except Exception as e:
         logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
-        return -1
+        raise
 
 async def withdraw_sui(from_addr: str) -> str | None:
+    """Rút toàn bộ SUI về ví mục tiêu"""
     if from_addr != withdraw_signer:
         logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
@@ -87,46 +93,41 @@ async def withdraw_sui(from_addr: str) -> str | None:
             amount=int(balance * 1_000_000_000),
             gas_object=gas_objs.data[0].object_id
         )
-        
         return tx_result.tx_digest if tx_result.tx_digest else None
     except Exception as e:
         logging.error(f"❌ Lỗi khi rút từ {safe_address(from_addr)}: {e}")
         return None
 
-@tasks.loop(seconds=1)
+@tasks.loop(seconds=5)  # Giảm xuống 5s để tránh rate limit
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
-        balance = get_sui_balance(addr)
-        last_balance = last_balances.get(addr, -1)
+        try:
+            balance = get_sui_balance(addr)
+            last_balance = last_balances.get(addr, -1)
 
-        if balance != last_balance and last_balance != -1:
-            change = balance - last_balance
-            emoji = "🔼" if change > 0 else "🔽"
-            message = (
-                f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
-                f"{emoji} Số dư: `{balance:.3f} SUI` ({'↑' if change > 0 else '↓'} {abs(change):.3f})"
-            )
-            try:
-                await bot.get_channel(CHANNEL_ID).send(message)
-            except Exception as e:
-                logging.error(f"Lỗi gửi Discord: {e}")
-
-        last_balances[addr] = balance
-
-        if wallet.get("withdraw", False) and balance > 0:
-            tx_hash = await withdraw_sui(addr)
-            if tx_hash:
+            if balance != last_balance and last_balance != -1:
+                change = balance - last_balance
+                emoji = "🔼" if change > 0 else "🔽"
                 message = (
-                    f"💸 **Đã rút tự động**\n"
-                    f"Ví: {wallet.get('name', safe_address(addr))}\n"
-                    f"Số tiền: `{balance:.3f} SUI`\n"
-                    f"TX: `{tx_hash}`"
+                    f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
+                    f"{emoji} Số dư: `{balance:.3f} SUI` ({'↑' if change > 0 else '↓'} {abs(change):.3f})"
                 )
-                try:
-                    await bot.get_channel(CHANNEL_ID).send(message)
-                except Exception as e:
-                    logging.error(f"Lỗi gửi Discord: {e}")
+                await bot.get_channel(CHANNEL_ID).send(message)
+
+            last_balances[addr] = balance
+
+            if wallet.get("withdraw", False) and balance > 0:
+                tx_hash = await withdraw_sui(addr)
+                if tx_hash:
+                    await bot.get_channel(CHANNEL_ID).send(
+                        f"💸 **Đã rút tự động**\n"
+                        f"Ví: {wallet.get('name', safe_address(addr))}\n"
+                        f"Số tiền: `{balance:.3f} SUI`\n"
+                        f"TX: `{tx_hash}`"
+                    )
+        except Exception as e:
+            logging.error(f"Lỗi khi xử lý ví {safe_address(addr)}: {e}")
 
 # === Web Server for Railway ===
 async def health_check(request):
@@ -146,7 +147,7 @@ async def on_ready():
     try:
         await bot.get_channel(CHANNEL_ID).send(
             f"🚀 **Bot SUI Monitor đã khởi động**\n"
-            f"• Theo dõi {len(WATCHED)} ví (1s/kiểm tra)\n"
+            f"• Theo dõi {len(WATCHED)} ví (5s/kiểm tra)\n"
             f"• RPC: `{RPC_URL}`\n"
             f"• Ví chủ: `{safe_address(withdraw_signer)}`"
         )
