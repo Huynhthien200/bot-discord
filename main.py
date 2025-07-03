@@ -6,6 +6,7 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
+from pysui.sui.sui_crypto import SuiKeyPair
 
 # === Cấu hình logging ===
 logging.basicConfig(
@@ -18,16 +19,16 @@ logging.basicConfig(
 )
 
 # === Biến môi trường ===
-RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
-DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-CHANNEL_ID    = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_PRIVATE_KEY  = os.getenv("SUI_PRIVATE_KEY")
-TARGET_ADDRESS   = os.getenv("SUI_TARGET_ADDRESS")
+RPC_URL         = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
+DISCORD_TOKEN   = os.getenv("DISCORD_TOKEN")
+CHANNEL_ID      = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
+SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
+TARGET_ADDRESS  = os.getenv("SUI_TARGET_ADDRESS")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
 
-# === Đọc danh sách ví từ watched.json ===
+# === Đọc danh sách ví ===
 try:
     with open("watched.json", "r") as f:
         WATCHED = json.load(f)
@@ -36,13 +37,15 @@ except Exception as e:
     logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === Kết nối SUI ===
+# === Kết nối SUI và load keypair ===
 try:
-    cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
+    # config chỉ để connect RPC; mình vẫn sign bằng keypair riêng
+    cfg    = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
     client = SyncClient(cfg)
-    withdraw_signer = str(cfg.active_address)
-    # Lấy SuiKeyPair đã load từ config
-    keypair = client.keypair_for_address(withdraw_signer)
+
+    # Load keypair trực tiếp
+    keypair        = SuiKeyPair.from_any(SUI_PRIVATE_KEY)
+    withdraw_signer = str(keypair.address)
     logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
 except Exception as e:
     logging.critical(f"Lỗi kết nối SUI: {e}")
@@ -53,23 +56,21 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-last_balances = {}  # addr -> {coin_type: balance}
+last_balances: dict[str, dict[str, float]] = {}
 
 def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 async def get_all_tokens(addr: str) -> dict[str, float]:
     """
-    Trả về dict {coin_type: balance} (đã normalize qua decimal)
+    Trả về dict {coin_type: balance} (đã normalize qua decimal 9)
     """
     try:
-        # Lấy tất cả coin objects
-        res = await asyncio.to_thread(client.get_all_coins, address=addr)
+        res   = await asyncio.to_thread(client.get_all_coins, address=addr)
         coins = res.result_data.data
         tokens: dict[str, float] = {}
         for coin in coins:
             typ = coin.coin_type
-            # giả sử decimal=9
             bal = int(coin.balance) / 1e9
             tokens[typ] = tokens.get(typ, 0) + bal
         return tokens
@@ -93,8 +94,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
     if bal <= 0:
         return None
 
-    # Lấy gas objects
-    gas_res = await asyncio.to_thread(client.get_gas, address=from_addr)
+    gas_res  = await asyncio.to_thread(client.get_gas, address=from_addr)
     gas_list = gas_res.result_data.data
     if not gas_list:
         logging.warning(f"⚠️ Không tìm thấy gas cho {safe_address(from_addr)}")
@@ -119,9 +119,9 @@ async def monitor_wallets():
         addr = w["address"]
         name = w.get("name", safe_address(addr))
         tokens = await get_all_tokens(addr)
-        prev = last_balances.get(addr, {})
+        prev   = last_balances.get(addr, {})
 
-        # Thông báo thay đổi số dư từng token
+        # So sánh thay đổi từng token
         changes: list[str] = []
         for typ, bal in tokens.items():
             old = prev.get(typ, -1)
@@ -137,7 +137,7 @@ async def monitor_wallets():
 
         last_balances[addr] = tokens
 
-        # Nếu được cấu hình rút và có SUI
+        # Nếu wallet["withdraw"]==True và có SUI
         if w.get("withdraw", False):
             sui = tokens.get("0x2::sui::SUI", 0.0)
             if sui > 0:
@@ -162,7 +162,7 @@ async def xemtokens(ctx, address: str):
         msg += f"- {label}: `{bal:.6f}`\n"
     await ctx.send(msg)
 
-# Keep-alive server for Railway
+# === Web Server for Railway ===
 async def health_check(request):
     return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví")
 
