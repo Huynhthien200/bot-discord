@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
