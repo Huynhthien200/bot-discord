@@ -1,8 +1,6 @@
 import os
 import json
 import logging
-import asyncio
-import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
@@ -50,27 +48,24 @@ except Exception as e:
     raise
 
 # === Discord Bot ===
-intents = commands.Intents.default()
+intents = discord.Intents.default()  # Sửa ở đây - thay đổi từ commands.Intents
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_balances = {}
 
 def safe_address(addr: str) -> str:
-    """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI (đơn vị SUI)"""
     try:
         res = client.get_all_coins(address=addr)
-        return sum(int(c.balance) / 1_000_000_000 for c in res.data)  # Convert to SUI
+        return sum(int(c.balance) / 1_000_000_000 for c in res.data)
     except Exception as e:
         logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
         return -1
 
 async def withdraw_sui(from_addr: str) -> str | None:
-    """Rút toàn bộ SUI về ví mục tiêu"""
     if from_addr != withdraw_signer:
         logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
@@ -88,24 +83,22 @@ async def withdraw_sui(from_addr: str) -> str | None:
         tx_result = client.transfer_sui(
             signer=from_addr,
             recipient=TARGET_ADDRESS,
-            amount=int(balance * 1_000_000_000),  # Convert to MIST
+            amount=int(balance * 1_000_000_000),
             gas_object=gas_objs.data[0].object_id
         )
         
-        if tx_result.tx_digest:
-            return tx_result.tx_digest
+        return tx_result.tx_digest if tx_result.tx_digest else None
     except Exception as e:
         logging.error(f"❌ Lỗi khi rút từ {safe_address(from_addr)}: {e}")
-    return None
+        return None
 
-@tasks.loop(seconds=1)  # Kiểm tra mỗi 1 giây
+@tasks.loop(seconds=1)
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
         balance = get_sui_balance(addr)
         last_balance = last_balances.get(addr, -1)
 
-        # Thông báo thay đổi số dư
         if balance != last_balance and last_balance != -1:
             change = balance - last_balance
             emoji = "🔼" if change > 0 else "🔽"
@@ -120,7 +113,6 @@ async def monitor_wallets():
 
         last_balances[addr] = balance
 
-        # Tự động rút nếu được bật
         if wallet.get("withdraw", False) and balance > 0:
             tx_hash = await withdraw_sui(addr)
             if tx_hash:
@@ -164,4 +156,5 @@ async def on_ready():
     await start_web_server()
 
 if __name__ == "__main__":
+    import discord  # Thêm import này ở đầu file nếu chưa có
     bot.run(DISCORD_TOKEN)
