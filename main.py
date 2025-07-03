@@ -11,7 +11,7 @@ from aiohttp import web
 from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_crypto import SuiKeyPair
 from pysui.sui.sui_types import SuiAddress
-from pysui.sui.sui_txn import SyncTransaction   # ← import SyncTransaction here
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from bech32 import bech32_decode, convertbits
 import base64
 
@@ -86,8 +86,9 @@ async def get_sui_balance(addr: str) -> float:
         return 0.0
 
 async def withdraw_sui(from_addr: str) -> str | None:
+    """Rút toàn bộ SUI từ from_addr về RECIPIENT"""
     if from_addr != withdraw_signer:
-        logging.warning(f"Không thể rút từ ví {from_addr}")
+        logging.warning(f"⚠️ Không thể rút từ ví {from_addr}")
         return None
 
     bal = await get_sui_balance(from_addr)
@@ -98,11 +99,14 @@ async def withdraw_sui(from_addr: str) -> str | None:
     gas_res = client.get_gas(address=from_addr)
     gas_list = gas_res.result_data.data
     if not gas_list:
-        logging.warning("Không tìm thấy gas object")
+        logging.warning(f"⚠️ Không tìm thấy gas object cho {from_addr}")
         return None
 
     def build_and_send():
-        tx = SyncTransaction(client)       # sender mặc định là active_address
+        tx = SuiTransaction(
+            client=client,
+            initial_sender=from_addr
+        )
         tx.transfer_sui(
             from_coin=gas_list[0].object_id,
             recipient=RECIPIENT,
@@ -113,10 +117,10 @@ async def withdraw_sui(from_addr: str) -> str | None:
 
     try:
         digest = await asyncio.to_thread(build_and_send)
-        logging.info(f"Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:8]}… · Tx: {digest}")
+        logging.info(f"💸 Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:8]}… · Tx: {digest}")
         return digest
     except Exception as e:
-        logging.error(f"Lỗi khi rút tiền: {e}")
+        logging.error(f"❌ Lỗi khi rút tiền: {e}")
         return None
 
 # === Discord setup ===
@@ -137,6 +141,7 @@ async def monitor():
         bal  = await get_sui_balance(addr)
         prev = last_balances.get(addr)
 
+        # Gửi thông báo khi số dư thay đổi
         if prev is not None and bal != prev:
             emoji = "🔼" if bal > prev else "🔽"
             await bot.get_channel(CHANNEL_ID).send(
@@ -144,14 +149,12 @@ async def monitor():
             )
         last_balances[addr] = bal
 
+        # Nếu withdraw=true thì tự động rút
         if w.get("withdraw", False) and bal > 0:
             tx = await withdraw_sui(addr)
             if tx:
                 await bot.get_channel(CHANNEL_ID).send(
-                    f"💸 **Đã rút tự động**\n"
-                    f"Ví: {name}\n"
-                    f"Số dư: `{bal:.6f} SUI`\n"
-                    f"Tx: `{tx}`"
+                    f"💸 **Đã rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
                 )
 
 @bot.command()
