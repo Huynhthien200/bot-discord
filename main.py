@@ -27,7 +27,7 @@ with open("watched.json", "r") as f:
 cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
 withdraw_signer = str(cfg.active_address)
-keypair = client.config.keypairs[withdraw_signer]
+keypair = client.keypair_for_address(withdraw_signer)
 
 # === Discord bot ===
 intents = commands.Intents.default()
