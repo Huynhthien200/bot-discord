@@ -65,7 +65,7 @@ async def get_all_tokens(addr: str):
     Lấy dict thông tin token: {coin_type(str): balance(float, đã chia decimal)}
     """
     try:
-        res = await asyncio.to_thread(client.get_coins, address=addr)
+        res = await asyncio.to_thread(client.get_all_coins, address=addr)
         tokens = {}
         for coin in res.data:
             coin_type = coin.coin_type
