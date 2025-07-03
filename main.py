@@ -2,110 +2,99 @@ import os
 import json
 import logging
 import asyncio
-from aiohttp import web
 from discord.ext import commands, tasks
+from aiohttp import web
 from pysui import SyncClient, SuiConfig
-from pysui.sui.sui_crypto import SuiKeyPair
 
 # === Logging setup ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 
-# === Environment Variables ===
+# === Env vars ===
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
-SUI_TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
+TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
 RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 
-if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, SUI_TARGET_ADDRESS]):
+if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường!")
 
-# === Load watched.json ===
+# === Load watched wallets ===
 with open("watched.json", "r") as f:
-    wallets = json.load(f)
+    WATCHED = json.load(f)
 
-# === Tách danh sách ví theo dõi và ví được rút
-WATCHED = {w['address']: w['name'] for w in wallets}
-WITHDRAW_ADDR = next((w['address'] for w in wallets if w.get("withdraw")), None)
-if not WITHDRAW_ADDR:
-    raise RuntimeError("❌ Không có ví nào được gán 'withdraw: true'!")
-
-# === Init client và keypair
+# === Sui setup ===
 cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
-signer_address = str(cfg.active_address)
-keypair = SuiKeyPair.from_keystring(SUI_PRIVATE_KEY)
-
-if signer_address != WITHDRAW_ADDR:
-    raise RuntimeError(f"⚠️ Private key không khớp với ví withdraw: {signer_address} != {WITHDRAW_ADDR}")
+withdraw_signer = str(cfg.active_address)
+keypair = cfg.active_address_keypair
 
 # === Discord bot ===
 intents = commands.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# === Lấy số dư
-def get_balance(address: str) -> int:
+last_balances = {}
+
+def get_balance(addr: str) -> int:
     try:
-        result = client.get_all_coins(address=address)
-        return sum(int(coin.balance) for coin in result.data)
+        res = client.get_all_coins(address=addr)
+        return sum(int(c.balance) for c in res.data)
     except Exception as e:
-        logging.error(f"Lỗi khi lấy số dư {address}: {e}")
+        logging.error(f"RPC lỗi khi lấy số dư ví {addr}: {e}")
         return -1
 
-# === Rút toàn bộ
-def withdraw_all():
+def withdraw_all(from_addr: str) -> str | None:
     try:
-        coins = client.get_gas(address=signer_address)
-        if not coins:
-            logging.warning("❌ Không có gas để rút")
+        if from_addr != withdraw_signer:
+            logging.warning(f"⚠️ Không thể rút từ ví {from_addr} vì không khớp ví rút tiền")
             return None
-
-        gas_obj = coins[0]
-        amount = get_balance(signer_address)
-        if amount <= 0:
+        gas_objs = client.get_gas(address=from_addr)
+        if not gas_objs:
+            logging.warning("⚠️ Không tìm thấy gas object")
             return None
-
-        tx_result = client.transfer_sui(
+        gas = gas_objs[0]
+        amt = get_balance(from_addr)
+        if amt <= 0:
+            return None
+        ptb = client.transfer_sui(
             signer=keypair,
-            recipient=SUI_TARGET_ADDRESS,
-            amount=amount,
-            gas_object=gas_obj.object_id
+            recipient=TARGET_ADDRESS,
+            amount=amt,
+            gas_object=gas.object_id
         )
-
-        if tx_result.result_data and tx_result.result_data.status.status == "success":
-            return tx_result.tx_digest
-        else:
-            logging.error("❌ Giao dịch thất bại")
+        digest = ptb.tx_digest
+        logging.info(f"Đã rút toàn bộ từ {from_addr} → {TARGET_ADDRESS} | TX: {digest}")
+        return digest
     except Exception as e:
-        logging.error(f"❌ Withdraw thất bại: {e}")
-    return None
-
-# === Theo dõi thay đổi số dư
-last_balances = {}
+        logging.error(f"❌ Lỗi khi rút tiền: {e}")
+        return None
 
 @tasks.loop(seconds=1)
 async def monitor():
-    for addr, name in WATCHED.items():
-        bal = get_balance(addr)
-        if addr not in last_balances:
-            last_balances[addr] = bal
-        if bal != last_balances[addr]:
-            ch = await bot.fetch_channel(CHANNEL_ID)
-            await ch.send(f"🔍 {name} (`{addr[:8]}...`) có số dư thay đổi: `{bal / 1e9:.4f} SUI`")
-            last_balances[addr] = bal
+    for wallet in WATCHED:
+        addr = wallet["address"]
+        is_withdraw = wallet.get("withdraw", False)
 
-        if addr == WITHDRAW_ADDR and bal > 0:
-            tx = withdraw_all()
+        balance = get_balance(addr)
+        last = last_balances.get(addr, -1)
+
+        if balance != last:
+            logging.info(f"📈 Ví {addr[:10]}... có số dư thay đổi: {balance}")
+            last_balances[addr] = balance
             ch = await bot.fetch_channel(CHANNEL_ID)
+            await ch.send(f"📈 Ví `{addr[:10]}...` thay đổi số dư: `{balance/1e9:.4f} SUI`")
+
+        if balance > 0 and is_withdraw:
+            logging.info(f"💸 Đủ điều kiện rút từ {addr}")
+            tx = withdraw_all(addr)
             if tx:
-                await ch.send(f"💸 Đã tự động rút `{bal / 1e9:.4f} SUI` từ `{name}` ➜ `{SUI_TARGET_ADDRESS}` · Tx: `{tx}`")
-            else:
-                await ch.send("⚠️ Không thể rút, kiểm tra log!")
+                ch = await bot.fetch_channel(CHANNEL_ID)
+                await ch.send(f"💸 Đã tự động rút `{balance/1e9:.4f} SUI` về ví `{TARGET_ADDRESS[:10]}...`\nTX: `{tx}`")
 
-# === Web server (ping Railway) ===
-async def handle(request):
-    return web.Response(text="Bot is alive.")
+# === Web server for Railway keep-alive ===
+async def handle(_):
+    return web.Response(text="✅ Bot is running.")
 
 async def start_web():
     app = web.Application()
@@ -117,9 +106,8 @@ async def start_web():
 
 @bot.event
 async def on_ready():
-    logging.info("✅ Bot đã sẵn sàng.")
-    ch = await bot.fetch_channel(CHANNEL_ID)
-    await ch.send("🟢 Bot đã khởi động và theo dõi số dư các ví!")
+    logging.info("✅ Bot Discord đã sẵn sàng.")
+    await bot.get_channel(CHANNEL_ID).send(f"🟢 Bot đã chạy và đang theo dõi {len(WATCHED)} ví.")
     monitor.start()
     bot.loop.create_task(start_web())
 
