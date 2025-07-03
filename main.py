@@ -42,7 +42,7 @@ try:
         prv_keys=[SUI_PRIVATE_KEY],
         rpc_url=RPC_URL
     )
-    client = SyncClient(cfg)
+    client = SyncClient(cfg)  # Sử dụng SyncClient thay vì SuiClient
     withdraw_signer = str(cfg.active_address)
     logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
 except Exception as e:
@@ -60,19 +60,19 @@ def safe_address(addr: str) -> str:
     """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
-def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI với cơ chế retry thủ công"""
-    retries = 3
-    for attempt in range(retries):
+async def get_sui_balance(addr: str) -> float:
+    """Lấy số dư SUI với cơ chế retry"""
+    max_retries = 3
+    for attempt in range(max_retries):
         try:
             res = client.get_all_coins(address=addr)
             return sum(int(c.balance) / 1_000_000_000 for c in res.data)
         except Exception as e:
-            if attempt == retries - 1:
+            if attempt == max_retries - 1:
                 logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
                 raise
             logging.warning(f"Thử lại lần {attempt + 1}...")
-            asyncio.sleep(2)
+            await asyncio.sleep(2)  # Sửa thành await
 
 async def withdraw_sui(from_addr: str) -> str | None:
     """Rút toàn bộ SUI về ví mục tiêu"""
@@ -81,7 +81,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
         return None
 
     try:
-        balance = get_sui_balance(from_addr)
+        balance = await get_sui_balance(from_addr)
         if balance <= 0:
             return None
 
@@ -101,12 +101,12 @@ async def withdraw_sui(from_addr: str) -> str | None:
         logging.error(f"❌ Lỗi khi rút từ {safe_address(from_addr)}: {e}")
         return None
 
-@tasks.loop(seconds=5)  # Kiểm tra mỗi 5 giây
+@tasks.loop(seconds=5)
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
         try:
-            balance = get_sui_balance(addr)
+            balance = await get_sui_balance(addr)
             last_balance = last_balances.get(addr, -1)
 
             if balance != last_balance and last_balance != -1:
