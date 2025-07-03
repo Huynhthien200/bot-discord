@@ -1,5 +1,5 @@
 discord.py>=2.0.0
-aiohttp
+aiohttp>=3.9.0
 httpx
 bech32
 pysui>=0.85.0
