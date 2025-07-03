@@ -6,7 +6,6 @@ import discord  # Import chính thức module discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
-from tenacity import retry, stop_after_attempt, wait_fixed
 
 # === Cấu hình logging ===
 logging.basicConfig(
