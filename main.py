@@ -4,7 +4,8 @@ import logging
 import asyncio
 from discord.ext import commands, tasks
 from aiohttp import web
-from pysui import SyncClient, SuiConfig
+from pysui import SuiConfig, SyncClient
+from pysui.sui.sui_clients import SuiClient
 
 # === Logging setup ===
 logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
