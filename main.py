@@ -8,6 +8,7 @@ from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
 from pysui.sui.sui_crypto import SuiKeyPair
+from pysui.sui.sui_txn.sync_transaction import SuiTransaction
 from bech32 import bech32_decode, convertbits
 import base64
 
@@ -40,7 +41,7 @@ except Exception as e:
     logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === Helper: load SuiKeyPair từ Bech32 / Base64 ===
+# === Helper: load SuiKeyPair from Bech32 or Base64 ===
 def load_keypair(raw: str) -> SuiKeyPair:
     raw = raw.strip()
     if raw.startswith("suiprivkey"):
@@ -50,15 +51,14 @@ def load_keypair(raw: str) -> SuiKeyPair:
         key_bytes = bytes(convertbits(data, 5, 8, False))
         b64 = base64.b64encode(key_bytes).decode()
         return SuiKeyPair.from_b64(b64)
-    else:
-        return SuiKeyPair.from_b64(raw)
+    return SuiKeyPair.from_b64(raw)
 
 # === Init Sui client & keypair ===
 cfg = SuiConfig.user_config(prv_keys=[SUI_PRIVATE_KEY], rpc_url=RPC_URL)
 client = SyncClient(cfg)
 keypair = load_keypair(SUI_PRIVATE_KEY)
 withdraw_signer = str(cfg.active_address)
-logging.info(f"SuiConfig active address: {withdraw_signer}")
+logging.info(f"SuiConfig active address (rút): {withdraw_signer}")
 
 # === HTTP client for JSON-RPC ===
 http_client = httpx.AsyncClient(timeout=10)
@@ -66,7 +66,12 @@ http_client = httpx.AsyncClient(timeout=10)
 async def get_sui_balance(addr: str) -> float:
     """Gọi suix_getBalance, trả về float SUI"""
     try:
-        payload = {"jsonrpc":"2.0","id":1,"method":"suix_getBalance","params":[addr]}
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "suix_getBalance",
+            "params": [addr]
+        }
         r = await http_client.post(RPC_URL, json=payload)
         r.raise_for_status()
         total = int(r.json()["result"]["totalBalance"])
@@ -75,34 +80,39 @@ async def get_sui_balance(addr: str) -> float:
         logging.error(f"Lỗi RPC lấy balance {addr[:8]}…: {e}")
         return 0.0
 
-async def withdraw_sui(addr: str) -> str | None:
-    """Rút toàn bộ SUI từ addr về TARGET_ADDRESS"""
-    if addr != withdraw_signer:
-        logging.warning(f"Không có quyền rút từ {addr}")
+async def withdraw_sui(from_addr: str) -> str | None:
+    """Rút toàn bộ SUI từ from_addr về TARGET_ADDRESS bằng SuiTransaction"""
+    if from_addr != withdraw_signer:
+        logging.warning(f"⚠️ Không thể rút từ ví {from_addr}")
         return None
 
-    bal = await get_sui_balance(addr)
+    bal = await get_sui_balance(from_addr)
     if bal <= 0:
         return None
 
-    # Lấy gas-coin để dùng fee
-    # JSON-RPC suix_getGasObjects không chuẩn, nên dùng pysui.get_gas():
-    gas_res = client.get_gas(address=addr)  # dù deprecated vẫn còn
-    if not gas_res.result_data.data:
-        logging.warning("Không tìm thấy gas object")
+    # Lấy gas object qua client.get_gas
+    gas_res = await asyncio.to_thread(client.get_gas, address=from_addr)
+    gas_list = gas_res.result_data.data
+    if not gas_list:
+        logging.warning(f"⚠️ Không tìm thấy gas object cho {from_addr}")
         return None
-    gas_obj = gas_res.result_data.data[0]
+
+    def build_and_send():
+        tx = SuiTransaction(client=client, initial_sender=from_addr)
+        tx.transfer_sui(
+            recipient=TARGET_ADDRESS,
+            from_coin=gas_list[0].object_id,
+            amount=int(bal * 1e9)
+        )
+        result = tx.execute()
+        return result.tx_digest
 
     try:
-        tx = client.transfer_sui(
-            signer=keypair,
-            recipient=TARGET_ADDRESS,
-            amount=int(bal * 1e9),
-            gas_object=gas_obj.object_id
-        )
-        return tx.tx_digest
+        digest = await asyncio.to_thread(build_and_send)
+        logging.info(f"💸 Đã rút {bal:.6f} SUI → {TARGET_ADDRESS[:10]}… · Tx: {digest}")
+        return digest
     except Exception as e:
-        logging.error(f"Lỗi khi rút từ {addr[:8]}…: {e}")
+        logging.error(f"❌ Lỗi khi rút tiền: {e}")
         return None
 
 # === Discord setup ===
@@ -114,7 +124,7 @@ last_balances: dict[str, float] = {}
 
 def safe(addr: str) -> str:
     return f"{addr[:6]}…{addr[-4:]}"
-    
+
 @tasks.loop(seconds=5)
 async def monitor():
     for w in WATCHED:
@@ -123,29 +133,38 @@ async def monitor():
         bal  = await get_sui_balance(addr)
         prev = last_balances.get(addr, None)
 
-        # Thông báo khi thay đổi
+        # Gửi thông báo khi số dư thay đổi
         if prev is not None and bal != prev:
             emoji = "🔼" if bal > prev else "🔽"
             await bot.get_channel(CHANNEL_ID).send(
-                f"**{name}** ({safe(addr)})\n{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
+                f"**{name}** ({safe(addr)})\n"
+                f"{emoji} `{bal:.6f} SUI` (trước: {prev:.6f})"
             )
         last_balances[addr] = bal
 
-        # Nếu wallet có withdraw=true và balance>0 → rút
+        # Nếu withdraw=true thì tự động rút
         if w.get("withdraw", False) and bal > 0:
             tx = await withdraw_sui(addr)
             if tx:
                 await bot.get_channel(CHANNEL_ID).send(
-                    f"💸 **Rút tự động**\nVí: {name}\nSố dư: `{bal:.6f} SUI`\nTx: `{tx}`"
+                    f"💸 **Đã rút tự động**\n"
+                    f"Ví: {name}\n"
+                    f"Số dư: `{bal:.6f} SUI`\n"
+                    f"Tx: `{tx}`"
                 )
 
-# === Keep-alive web for Railway ===
-async def ping(_):
+@bot.command()
+async def xemtokens(ctx, address: str):
+    bal = await get_sui_balance(address)
+    await ctx.send(f"Số dư của `{address}`: `{bal:.6f} SUI`")
+
+# === Keep-alive server for Railway ===
+async def health(request):
     return web.Response(text="OK")
 
 async def start_web():
     app = web.Application()
-    app.router.add_get("/", ping)
+    app.router.add_get("/", health)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT","8080")))
@@ -153,7 +172,7 @@ async def start_web():
 
 @bot.event
 async def on_ready():
-    logging.info("Bot started. Watching %d wallets.", len(WATCHED))
+    logging.info(f"Bot started. Monitoring {len(WATCHED)} wallets.")
     await bot.get_channel(CHANNEL_ID).send(f"🟢 Bot đã khởi động, theo dõi {len(WATCHED)} ví.")
     monitor.start()
     bot.loop.create_task(start_web())
