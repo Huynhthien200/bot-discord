@@ -6,8 +6,8 @@ import random
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
-from pysui import SuiConfig, SyncClient
-from pysui.sui.sui_clients import SuiClient
+from pysui import SuiConfig
+from pysui.sui.sui_clients.sync_client import SuiClient  # Cập nhật import mới
 from pysui.sui.sui_types import SuiString
 
 # === Cấu hình logging ===
@@ -57,7 +57,7 @@ class SuiManager:
                 prv_keys=[SUI_PRIVATE_KEY],
                 rpc_url=self.current_rpc
             )
-            return SuiClient(cfg)  # Sử dụng SuiClient thay vì SyncClient
+            return SuiClient(cfg)
         except Exception as e:
             logging.error(f"Lỗi tạo client với RPC {self.current_rpc}: {e}")
             return None
