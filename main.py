@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
-from pysui.sui.sui_txn import SyncTransaction
+from pysui.sui.sui_pgql.pgql_clients import SuiGQLClient
 from pysui.sui.sui_types import SuiString
 
 # === Cấu hình logging ===
@@ -86,14 +86,16 @@ def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 async def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI sử dụng API mới"""
+    """Lấy số dư SUI sử dụng GraphQL API mới"""
     global rpc_errors
     
     for attempt in range(3):  # Thử tối đa 3 lần
         try:
-            txn = SyncTransaction(sui_manager.client, initial_sender=addr)
-            coins = txn.get_coin_records(
-                coin_type=SuiString("0x2::sui::SUI"),
+            # Sử dụng GraphQL client mới
+            gql_client = SuiGQLClient(sui_manager.client.config)
+            coins = await gql_client.get_coins(
+                owner=SuiString(addr),
+                coin_type="0x2::sui::SUI",
                 limit=10
             )
             
@@ -122,25 +124,27 @@ async def withdraw_sui(from_addr: str) -> str | None:
 
     try:
         # Lấy số dư và coins
-        txn = SyncTransaction(sui_manager.client, initial_sender=from_addr)
-        coins = txn.get_coin_records(
-            coin_type=SuiString("0x2::sui::SUI"),
+        balance = await get_sui_balance(from_addr)
+        if balance <= 0.001:  # Bỏ qua nếu số dư quá nhỏ
+            return None
+
+        # Sử dụng GraphQL client mới
+        gql_client = SuiGQLClient(sui_manager.client.config)
+        coins = await gql_client.get_coins(
+            owner=SuiString(from_addr),
+            coin_type="0x2::sui::SUI",
             limit=1
         )
         
         if not coins.data:
-            logging.warning(f"⚠️ Không tìm thấy coins cho {safe_address(from_addr)}")
-            return None
-            
-        balance = sum(int(c.balance) for c in coins.data) / 1_000_000_000
-        if balance <= 0.001:  # Bỏ qua nếu số dư quá nhỏ
             return None
 
         # Thực hiện giao dịch
-        result = txn.transfer_sui(
+        result = await gql_client.transfer_sui(
+            signer=SuiString(from_addr),
             recipient=SuiString(TARGET_ADDRESS),
             amount=int(balance * 1_000_000_000),
-            from_coin=coins.data[0].object_id
+            gas_budget=10_000_000
         )
 
         if result.tx_digest:
