@@ -7,7 +7,7 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
-from pysui.sui.sui_pgql.pgql_clients import SuiGQLClient
+from pysui.sui.sui_clients import SuiClient
 from pysui.sui.sui_types import SuiString
 
 # === Cấu hình logging ===
@@ -22,10 +22,9 @@ logging.basicConfig(
 
 # === Danh sách RPC luân phiên ===
 RPC_ENDPOINTS = [
-    "https://rpc-mainnet.suiscan.xyz",
     "https://fullnode.mainnet.sui.io",
-    "https://sui-mainnet-rpc.nodereal.io",
-    "https://sui-mainnet-endpoint.blockvision.org"
+    "https://rpc-mainnet.suiscan.xyz",
+    "https://sui-mainnet-rpc.nodereal.io"
 ]
 
 # === Biến môi trường ===
@@ -58,17 +57,23 @@ class SuiManager:
                 prv_keys=[SUI_PRIVATE_KEY],
                 rpc_url=self.current_rpc
             )
-            return SyncClient(cfg)
+            return SuiClient(cfg)  # Sử dụng SuiClient thay vì SyncClient
         except Exception as e:
             logging.error(f"Lỗi tạo client với RPC {self.current_rpc}: {e}")
             return None
             
     def switch_rpc(self):
         old_rpc = self.current_rpc
-        self.current_rpc = random.choice([rpc for rpc in RPC_ENDPOINTS if rpc != old_rpc])
+        remaining_rpcs = [rpc for rpc in RPC_ENDPOINTS if rpc != old_rpc]
+        if not remaining_rpcs:
+            return False
+            
+        self.current_rpc = random.choice(remaining_rpcs)
         self.client = self._create_client()
-        logging.info(f"Đã chuyển từ RPC {old_rpc} sang {self.current_rpc}")
-        return self.client is not None
+        if self.client:
+            logging.info(f"Đã chuyển từ RPC {old_rpc} sang {self.current_rpc}")
+            return True
+        return False
 
 sui_manager = SuiManager()
 
@@ -86,30 +91,24 @@ def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 async def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI sử dụng GraphQL API mới"""
+    """Lấy số dư SUI sử dụng API ổn định"""
     global rpc_errors
     
-    for attempt in range(3):  # Thử tối đa 3 lần
+    for attempt in range(3):
         try:
-            # Sử dụng GraphQL client mới
-            gql_client = SuiGQLClient(sui_manager.client.config)
-            coins = await gql_client.get_coins(
-                owner=SuiString(addr),
-                coin_type="0x2::sui::SUI",
-                limit=10
-            )
-            
-            if coins and coins.data:
+            if not sui_manager.client:
+                raise Exception("Client SUI chưa được khởi tạo")
+                
+            coins = sui_manager.client.get_gas(addr)
+            if coins and coins.result_data:
                 rpc_errors = 0
-                total = sum(int(c.balance) for c in coins.data)
-                return total / 1_000_000_000  # Convert từ MIST sang SUI
+                total = sum(int(c.balance) for c in coins.result_data)
+                return total / 1_000_000_000
             return 0
         except Exception as e:
             logging.warning(f"Lỗi RPC {sui_manager.current_rpc} (lần {attempt + 1}): {e}")
             if attempt == 2 or rpc_errors >= MAX_RPC_ERRORS:
-                if sui_manager.switch_rpc():
-                    rpc_errors = 0
-                else:
+                if not sui_manager.switch_rpc():
                     logging.error("Không thể chuyển sang RPC mới")
             await asyncio.sleep(1)
     
@@ -118,53 +117,43 @@ async def get_sui_balance(addr: str) -> float:
 
 async def withdraw_sui(from_addr: str) -> str | None:
     """Rút toàn bộ SUI về ví mục tiêu"""
+    if not sui_manager.client:
+        logging.error("Client SUI không khả dụng")
+        return None
+
     if from_addr != str(sui_manager.client.config.active_address):
         logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
 
     try:
-        # Lấy số dư và coins
         balance = await get_sui_balance(from_addr)
-        if balance <= 0.001:  # Bỏ qua nếu số dư quá nhỏ
+        if balance <= 0.001:
             return None
 
-        # Sử dụng GraphQL client mới
-        gql_client = SuiGQLClient(sui_manager.client.config)
-        coins = await gql_client.get_coins(
-            owner=SuiString(from_addr),
-            coin_type="0x2::sui::SUI",
-            limit=1
-        )
-        
-        if not coins.data:
-            return None
-
-        # Thực hiện giao dịch
-        result = await gql_client.transfer_sui(
-            signer=SuiString(from_addr),
-            recipient=SuiString(TARGET_ADDRESS),
+        tx_result = sui_manager.client.transfer_sui(
+            signer=from_addr,
+            recipient=TARGET_ADDRESS,
             amount=int(balance * 1_000_000_000),
             gas_budget=10_000_000
         )
 
-        if result.tx_digest:
+        if tx_result and tx_result.result_data:
+            tx_digest = tx_result.result_data.tx_digest
             logging.info(f"✅ Đã gửi {balance:.6f} SUI từ {safe_address(from_addr)}")
             
-            # Gửi thông báo đến Discord
             try:
                 channel = bot.get_channel(CHANNEL_ID)
-                msg = await channel.send(
+                await channel.send(
                     f"💸 **Giao dịch thành công**\n"
                     f"• Từ: `{safe_address(from_addr)}`\n"
                     f"• Đến: `{safe_address(TARGET_ADDRESS)}`\n"
                     f"• Số lượng: `{balance:.6f} SUI`\n"
-                    f"• TX Hash: `{result.tx_digest}`\n"
+                    f"• TX Hash: `{tx_digest}`\n"
                     f"• RPC: `{sui_manager.current_rpc}`"
                 )
-                return result.tx_digest
+                return tx_digest
             except Exception as e:
-                logging.error(f"Lỗi khi gửi thông báo Discord: {e}")
-            
+                logging.error(f"Lỗi gửi thông báo Discord: {e}")
     except Exception as e:
         logging.error(f"❌ Lỗi khi rút tiền: {e}")
         try:
@@ -185,12 +174,11 @@ async def monitor_wallets():
         addr = wallet["address"]
         try:
             balance = await get_sui_balance(addr)
-            if balance < 0:  # Bỏ qua nếu lỗi
+            if balance < 0:
                 continue
                 
             last_balance = last_balances.get(addr, -1)
 
-            # Thông báo thay đổi số dư
             if balance != last_balance and last_balance != -1:
                 change = balance - last_balance
                 emoji = "🔼" if change > 0 else "🔽"
@@ -206,7 +194,6 @@ async def monitor_wallets():
 
             last_balances[addr] = balance
 
-            # Tự động rút nếu được bật
             if wallet.get("withdraw", False) and balance > 0.001:
                 await withdraw_sui(addr)
                 
