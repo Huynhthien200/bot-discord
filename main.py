@@ -24,6 +24,7 @@ RPC_ENDPOINTS = [
     "https://fullnode.mainnet.sui.io",
     "https://sui-mainnet-rpc.nodereal.io",
     "https://sui-mainnet-endpoint.blockvision.org"
+    "https://api.zan.top/node/v1/sui/mainnet/960379ddfce6475d9a1a000c24bad891"
 ]
 
 # === Biến môi trường ===
