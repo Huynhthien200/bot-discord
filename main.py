@@ -7,6 +7,8 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
+from pysui.sui.sui_txn import SyncTransaction
+from pysui.sui.sui_types import SuiString
 
 # === Cấu hình logging ===
 logging.basicConfig(
@@ -24,7 +26,6 @@ RPC_ENDPOINTS = [
     "https://fullnode.mainnet.sui.io",
     "https://sui-mainnet-rpc.nodereal.io",
     "https://sui-mainnet-endpoint.blockvision.org"
-    "https://api.zan.top/node/v1/sui/mainnet/960379ddfce6475d9a1a000c24bad891"
 ]
 
 # === Biến môi trường ===
@@ -85,21 +86,25 @@ def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 async def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI với cơ chế retry và fallback RPC"""
+    """Lấy số dư SUI sử dụng API mới"""
     global rpc_errors
     
-    for _ in range(2):  # Thử tối đa 2 lần
+    for attempt in range(3):  # Thử tối đa 3 lần
         try:
-            coins = sui_manager.client.get_gas(address=addr)
-            if coins and hasattr(coins, 'data'):
-                rpc_errors = 0  # Reset counter khi thành công
+            txn = SyncTransaction(sui_manager.client, initial_sender=addr)
+            coins = txn.get_coin_records(
+                coin_type=SuiString("0x2::sui::SUI"),
+                limit=10
+            )
+            
+            if coins and coins.data:
+                rpc_errors = 0
                 total = sum(int(c.balance) for c in coins.data)
-                return total / 1_000_000_000
+                return total / 1_000_000_000  # Convert từ MIST sang SUI
             return 0
         except Exception as e:
-            logging.warning(f"Lỗi RPC {sui_manager.current_rpc}: {e}")
-            rpc_errors += 1
-            if rpc_errors >= MAX_RPC_ERRORS:
+            logging.warning(f"Lỗi RPC {sui_manager.current_rpc} (lần {attempt + 1}): {e}")
+            if attempt == 2 or rpc_errors >= MAX_RPC_ERRORS:
                 if sui_manager.switch_rpc():
                     rpc_errors = 0
                 else:
@@ -116,37 +121,45 @@ async def withdraw_sui(from_addr: str) -> str | None:
         return None
 
     try:
-        # Lấy số dư chính xác
-        balance = await get_sui_balance(from_addr)
+        # Lấy số dư và coins
+        txn = SyncTransaction(sui_manager.client, initial_sender=from_addr)
+        coins = txn.get_coin_records(
+            coin_type=SuiString("0x2::sui::SUI"),
+            limit=1
+        )
+        
+        if not coins.data:
+            logging.warning(f"⚠️ Không tìm thấy coins cho {safe_address(from_addr)}")
+            return None
+            
+        balance = sum(int(c.balance) for c in coins.data) / 1_000_000_000
         if balance <= 0.001:  # Bỏ qua nếu số dư quá nhỏ
             return None
 
         # Thực hiện giao dịch
-        tx_result = sui_manager.client.transfer_sui(
-            signer=from_addr,
-            recipient=TARGET_ADDRESS,
+        result = txn.transfer_sui(
+            recipient=SuiString(TARGET_ADDRESS),
             amount=int(balance * 1_000_000_000),
-            gas_budget=10_000_000
+            from_coin=coins.data[0].object_id
         )
 
-        if tx_result.tx_digest:
+        if result.tx_digest:
             logging.info(f"✅ Đã gửi {balance:.6f} SUI từ {safe_address(from_addr)}")
             
             # Gửi thông báo đến Discord
             try:
                 channel = bot.get_channel(CHANNEL_ID)
-                await channel.send(
+                msg = await channel.send(
                     f"💸 **Giao dịch thành công**\n"
                     f"• Từ: `{safe_address(from_addr)}`\n"
                     f"• Đến: `{safe_address(TARGET_ADDRESS)}`\n"
                     f"• Số lượng: `{balance:.6f} SUI`\n"
-                    f"• TX Hash: `{tx_result.tx_digest}`\n"
+                    f"• TX Hash: `{result.tx_digest}`\n"
                     f"• RPC: `{sui_manager.current_rpc}`"
                 )
+                return result.tx_digest
             except Exception as e:
                 logging.error(f"Lỗi khi gửi thông báo Discord: {e}")
-            
-            return tx_result.tx_digest
             
     except Exception as e:
         logging.error(f"❌ Lỗi khi rút tiền: {e}")
@@ -154,7 +167,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
             channel = bot.get_channel(CHANNEL_ID)
             await channel.send(
                 f"❌ Giao dịch thất bại từ `{safe_address(from_addr)}`\n"
-                f"• Lỗi: `{str(e)}`\n"
+                f"• Lỗi: `{str(e)[:200]}`\n"
                 f"• RPC: `{sui_manager.current_rpc}`"
             )
         except Exception as e:
@@ -162,7 +175,7 @@ async def withdraw_sui(from_addr: str) -> str | None:
     
     return None
 
-@tasks.loop(seconds=1)  # Kiểm tra mỗi 1 giây
+@tasks.loop(seconds=1)
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
