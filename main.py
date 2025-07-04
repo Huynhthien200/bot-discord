@@ -2,6 +2,7 @@ import os
 import json
 import logging
 import asyncio
+import random
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
@@ -17,8 +18,15 @@ logging.basicConfig(
     ]
 )
 
+# === Danh sách RPC luân phiên ===
+RPC_ENDPOINTS = [
+    "https://rpc-mainnet.suiscan.xyz",
+    "https://fullnode.mainnet.sui.io",
+    "https://sui-mainnet-rpc.nodereal.io",
+    "https://sui-mainnet-endpoint.blockvision.org"
+]
+
 # === Biến môi trường ===
-RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
@@ -36,18 +44,31 @@ except Exception as e:
     logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === Kết nối SUI ===
-try:
-    cfg = SuiConfig.user_config(
-        prv_keys=[SUI_PRIVATE_KEY],
-        rpc_url=RPC_URL
-    )
-    client = SyncClient(cfg)
-    withdraw_signer = str(cfg.active_address)
-    logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
-except Exception as e:
-    logging.critical(f"Lỗi kết nối SUI: {e}")
-    raise
+# === Quản lý kết nối SUI ===
+class SuiManager:
+    def __init__(self):
+        self.current_rpc = random.choice(RPC_ENDPOINTS)
+        self.client = self._create_client()
+        
+    def _create_client(self):
+        try:
+            cfg = SuiConfig.user_config(
+                prv_keys=[SUI_PRIVATE_KEY],
+                rpc_url=self.current_rpc
+            )
+            return SyncClient(cfg)
+        except Exception as e:
+            logging.error(f"Lỗi tạo client với RPC {self.current_rpc}: {e}")
+            return None
+            
+    def switch_rpc(self):
+        old_rpc = self.current_rpc
+        self.current_rpc = random.choice([rpc for rpc in RPC_ENDPOINTS if rpc != old_rpc])
+        self.client = self._create_client()
+        logging.info(f"Đã chuyển từ RPC {old_rpc} sang {self.current_rpc}")
+        return self.client is not None
+
+sui_manager = SuiManager()
 
 # === Discord Bot ===
 intents = discord.Intents.default()
@@ -55,56 +76,56 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_balances = {}
+rpc_errors = 0
+MAX_RPC_ERRORS = 3
 
 def safe_address(addr: str) -> str:
     """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 async def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI với cơ chế retry"""
-    max_retries = 3
-    for attempt in range(max_retries):
+    """Lấy số dư SUI với cơ chế retry và fallback RPC"""
+    global rpc_errors
+    
+    for _ in range(2):  # Thử tối đa 2 lần
         try:
-            coins = client.get_gas(address=addr)
+            coins = sui_manager.client.get_gas(address=addr)
             if coins and hasattr(coins, 'data'):
+                rpc_errors = 0  # Reset counter khi thành công
                 total = sum(int(c.balance) for c in coins.data)
-                return total / 1_000_000_000  # Convert từ MIST sang SUI
+                return total / 1_000_000_000
             return 0
         except Exception as e:
-            if attempt == max_retries - 1:
-                logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
-                raise
-            await asyncio.sleep(2)
-            logging.warning(f"Thử lại lần {attempt + 1}...")
-    return 0
+            logging.warning(f"Lỗi RPC {sui_manager.current_rpc}: {e}")
+            rpc_errors += 1
+            if rpc_errors >= MAX_RPC_ERRORS:
+                if sui_manager.switch_rpc():
+                    rpc_errors = 0
+                else:
+                    logging.error("Không thể chuyển sang RPC mới")
+            await asyncio.sleep(1)
+    
+    logging.error(f"Không thể lấy số dư cho {safe_address(addr)}")
+    return -1
 
 async def withdraw_sui(from_addr: str) -> str | None:
     """Rút toàn bộ SUI về ví mục tiêu"""
-    if from_addr != withdraw_signer:
+    if from_addr != str(sui_manager.client.config.active_address):
         logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
 
     try:
         # Lấy số dư chính xác
-        coins = client.get_gas(address=from_addr)
-        if not coins.data:
-            logging.warning(f"⚠️ Không tìm thấy coins cho {safe_address(from_addr)}")
-            return None
-            
-        balance = sum(int(c.balance) for c in coins.data) / 1_000_000_000
+        balance = await get_sui_balance(from_addr)
         if balance <= 0.001:  # Bỏ qua nếu số dư quá nhỏ
-            logging.info(f"Số dư {balance} SUI quá nhỏ, bỏ qua")
             return None
 
-        # Chọn gas object đầu tiên
-        gas_obj = coins.data[0].object_id
-        
         # Thực hiện giao dịch
-        tx_result = client.transfer_sui(
+        tx_result = sui_manager.client.transfer_sui(
             signer=from_addr,
             recipient=TARGET_ADDRESS,
             amount=int(balance * 1_000_000_000),
-            gas_object=gas_obj
+            gas_budget=10_000_000
         )
 
         if tx_result.tx_digest:
@@ -118,7 +139,8 @@ async def withdraw_sui(from_addr: str) -> str | None:
                     f"• Từ: `{safe_address(from_addr)}`\n"
                     f"• Đến: `{safe_address(TARGET_ADDRESS)}`\n"
                     f"• Số lượng: `{balance:.6f} SUI`\n"
-                    f"• TX Hash: `{tx_result.tx_digest}`"
+                    f"• TX Hash: `{tx_result.tx_digest}`\n"
+                    f"• RPC: `{sui_manager.current_rpc}`"
                 )
             except Exception as e:
                 logging.error(f"Lỗi khi gửi thông báo Discord: {e}")
@@ -129,18 +151,25 @@ async def withdraw_sui(from_addr: str) -> str | None:
         logging.error(f"❌ Lỗi khi rút tiền: {e}")
         try:
             channel = bot.get_channel(CHANNEL_ID)
-            await channel.send(f"❌ Giao dịch thất bại từ `{safe_address(from_addr)}`: {str(e)}")
+            await channel.send(
+                f"❌ Giao dịch thất bại từ `{safe_address(from_addr)}`\n"
+                f"• Lỗi: `{str(e)}`\n"
+                f"• RPC: `{sui_manager.current_rpc}`"
+            )
         except Exception as e:
             logging.error(f"Lỗi khi gửi thông báo lỗi: {e}")
     
     return None
 
-@tasks.loop(seconds=5)
+@tasks.loop(seconds=1)  # Kiểm tra mỗi 1 giây
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
         try:
             balance = await get_sui_balance(addr)
+            if balance < 0:  # Bỏ qua nếu lỗi
+                continue
+                
             last_balance = last_balances.get(addr, -1)
 
             # Thông báo thay đổi số dư
@@ -149,7 +178,8 @@ async def monitor_wallets():
                 emoji = "🔼" if change > 0 else "🔽"
                 message = (
                     f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
-                    f"{emoji} Số dư: `{balance:.6f} SUI` ({'↑' if change > 0 else '↓'} {abs(change):.6f})"
+                    f"{emoji} Số dư: `{balance:.6f} SUI` ({'↑' if change > 0 else '↓'} {abs(change):.6f})\n"
+                    f"• RPC: `{sui_manager.current_rpc}`"
                 )
                 try:
                     await bot.get_channel(CHANNEL_ID).send(message)
@@ -167,7 +197,7 @@ async def monitor_wallets():
 
 # === Web Server for Railway ===
 async def health_check(request):
-    return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví")
+    return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví | RPC: {sui_manager.current_rpc}")
 
 async def start_web_server():
     app = web.Application()
@@ -184,9 +214,9 @@ async def on_ready():
         channel = bot.get_channel(CHANNEL_ID)
         await channel.send(
             f"🚀 **Bot SUI Monitor đã khởi động**\n"
-            f"• Theo dõi {len(WATCHED)} ví (5s/kiểm tra)\n"
-            f"• RPC: `{RPC_URL}`\n"
-            f"• Ví chủ: `{safe_address(withdraw_signer)}`\n"
+            f"• Theo dõi {len(WATCHED)} ví (1s/kiểm tra)\n"
+            f"• RPC hiện tại: `{sui_manager.current_rpc}`\n"
+            f"• Ví chủ: `{safe_address(str(sui_manager.client.config.active_address))}`\n"
             f"• Ví đích: `{safe_address(TARGET_ADDRESS)}`"
         )
     except Exception as e:
