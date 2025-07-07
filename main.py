@@ -6,8 +6,6 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 from pysui import SuiConfig, SyncClient
-print(dir(client))
-exit()
 
 # === Logging setup ===
 logging.basicConfig(
@@ -45,6 +43,9 @@ try:
         rpc_url=RPC_URL
     )
     client = SyncClient(cfg)
+    print(dir(client))
+    exit()
+
     withdraw_signer = str(cfg.active_address)
     logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
 except Exception as e:
