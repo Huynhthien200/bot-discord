@@ -2,15 +2,12 @@ import os
 import json
 import logging
 import asyncio
-import random
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
-from pysui import SuiConfig
-from pysui.sui.sui_clients.sync_client import SuiClient
-from pysui.sui.sui_types import SuiString
+from pysui import SuiConfig, SyncClient
 
-# === Logging Setup ===
+# === Logging setup ===
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -20,65 +17,37 @@ logging.basicConfig(
     ]
 )
 
-# === RPC Endpoints ===
-RPC_ENDPOINTS = [
-    "https://fullnode.mainnet.sui.io",
-    "https://rpc-mainnet.suiscan.xyz",
-    "https://sui-mainnet-endpoint.blockvision.org"
-]
-
-# === Environment Variables ===
+# === Environment ===
+RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
-    raise RuntimeError("❌ Missing required environment variables!")
+    raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
 
-# === Watched Wallets ===
+# === Load watched addresses ===
 try:
     with open("watched.json", "r") as f:
         WATCHED = json.load(f)
-    logging.info(f"Loaded {len(WATCHED)} wallets from watched.json")
+    logging.info(f"Đã tải {len(WATCHED)} ví từ watched.json")
 except Exception as e:
-    logging.error(f"Error reading watched.json: {e}")
+    logging.error(f"Lỗi đọc watched.json: {e}")
     WATCHED = []
 
-# === SUI Connection Manager ===
-class SuiManager:
-    def __init__(self):
-        self.current_rpc = random.choice(RPC_ENDPOINTS)
-        self.client = self._create_client()
-        
-    def _create_client(self):
-        try:
-            cfg = SuiConfig.user_config(
-                prv_keys=[SUI_PRIVATE_KEY],
-                rpc_url=self.current_rpc
-            )
-            client = SuiClient(cfg)
-            # Test connection immediately
-            client.get_coin_objects(SuiString(str(cfg.active_address)), limit=1)
-            return client
-        except Exception as e:
-            logging.error(f"Error creating client with RPC {self.current_rpc}: {e}")
-            return None
-            
-    def switch_rpc(self):
-        old_rpc = self.current_rpc
-        remaining_rpcs = [rpc for rpc in RPC_ENDPOINTS if rpc != old_rpc]
-        if not remaining_rpcs:
-            return False
-            
-        self.current_rpc = random.choice(remaining_rpcs)
-        self.client = self._create_client()
-        if self.client:
-            logging.info(f"Switched from RPC {old_rpc} to {self.current_rpc}")
-            return True
-        return False
-
-sui_manager = SuiManager()
+# === Kết nối SUI ===
+try:
+    cfg = SuiConfig.user_config(
+        prv_keys=[SUI_PRIVATE_KEY],
+        rpc_url=RPC_URL
+    )
+    client = SyncClient(cfg)
+    withdraw_signer = str(cfg.active_address)
+    logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
+except Exception as e:
+    logging.critical(f"Lỗi kết nối SUI: {e}")
+    raise
 
 # === Discord Bot ===
 intents = discord.Intents.default()
@@ -86,141 +55,100 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 last_balances = {}
-rpc_errors = 0
-MAX_RPC_ERRORS = 3
 
 def safe_address(addr: str) -> str:
-    """Obfuscate wallet address for security"""
+    """Ẩn một phần địa chỉ ví để bảo mật"""
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
-async def get_sui_balance(addr: str) -> float:
-    """Get SUI balance with proper error handling"""
-    global rpc_errors
-    
-    for attempt in range(3):
-        try:
-            if not sui_manager.client:
-                raise Exception("SUI client not initialized")
-                
-            coins = sui_manager.client.get_coin_objects(
-                owner=SuiString(addr),
-                coin_type="0x2::sui::SUI",
-                limit=10
-            )
-            
-            if coins and hasattr(coins, 'data'):
-                rpc_errors = 0
-                return sum(int(c.balance) for c in coins.data) / 1_000_000_000
-            return 0
-        except Exception as e:
-            logging.warning(f"RPC {sui_manager.current_rpc} error (attempt {attempt + 1}): {str(e)[:200]}")
-            if attempt == 2 or rpc_errors >= MAX_RPC_ERRORS:
-                if not sui_manager.switch_rpc():
-                    logging.error("Failed to switch RPC")
-            await asyncio.sleep(1)
-    
-    logging.error(f"Failed to get balance for {safe_address(addr)}")
-    return -1
+def get_sui_balance(addr: str) -> float:
+    """Lấy số dư SUI (đơn vị SUI) cho pysui >=0.85.0"""
+    try:
+        res = client.get_all_coins(address=addr)
+        # pysui >=0.85.0 trả về object có .data là list coin object
+        total = 0
+        for coin in res.data:
+            if coin.coin_type == "0x2::sui::SUI":
+                total += int(coin.balance)
+        return total / 1_000_000_000
+    except Exception as e:
+        logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
+        return -1
 
 async def withdraw_sui(from_addr: str) -> str | None:
-    """Withdraw all SUI to target address"""
-    if not sui_manager.client:
-        logging.error("SUI client not available")
+    """Rút toàn bộ SUI về ví mục tiêu"""
+    if from_addr != withdraw_signer:
+        logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
 
     try:
-        # Get coins for the address
-        coins = sui_manager.client.get_coin_objects(
-            owner=SuiString(from_addr),
-            coin_type="0x2::sui::SUI",
-            limit=1
-        )
-        
-        if not coins.data:
-            logging.warning(f"No coins found for {safe_address(from_addr)}")
+        # Lấy số dư thực tế
+        balance = get_sui_balance(from_addr)
+        if balance <= 0:
             return None
 
-        # Get precise balance
-        balance = sum(int(c.balance) for c in coins.data) / 1_000_000_000
-        if balance <= 0.001:  # Skip small balances
+        # Lấy gas object
+        gas_objs = client.get_all_coins(address=from_addr)
+        if not gas_objs.data:
+            logging.warning(f"⚠️ Không tìm thấy Gas Object cho {safe_address(from_addr)}")
             return None
 
-        # Execute transfer
-        tx_result = sui_manager.client.transfer_sui(
+        gas_object_id = gas_objs.data[0].coin_object_id
+        mist_amount = int(balance * 1_000_000_000) - 10000  # trừ phí chút
+
+        # Gọi transfer
+        tx_result = client.transfer_sui(
             signer=from_addr,
             recipient=TARGET_ADDRESS,
-            amount=int(balance * 1_000_000_000),
-            gas_budget=10_000_000
+            amount=mist_amount,
+            gas_object=gas_object_id
         )
 
-        if tx_result and tx_result.result_data:
-            tx_digest = tx_result.result_data.tx_digest
-            logging.info(f"✅ Sent {balance:.6f} SUI from {safe_address(from_addr)}")
-            
-            try:
-                channel = bot.get_channel(CHANNEL_ID)
-                await channel.send(
-                    f"💸 **Transaction Successful**\n"
-                    f"• From: `{safe_address(from_addr)}`\n"
-                    f"• To: `{safe_address(TARGET_ADDRESS)}`\n"
-                    f"• Amount: `{balance:.6f} SUI`\n"
-                    f"• TX Hash: `{tx_digest}`\n"
-                    f"• RPC: `{sui_manager.current_rpc}`"
-                )
-                return tx_digest
-            except Exception as e:
-                logging.error(f"Discord send error: {e}")
-    except Exception as e:
-        logging.error(f"❌ Withdrawal error: {e}")
-        try:
-            channel = bot.get_channel(CHANNEL_ID)
-            await channel.send(
-                f"❌ Failed transaction from `{safe_address(from_addr)}`\n"
-                f"• Error: `{str(e)[:200]}`\n"
-                f"• RPC: `{sui_manager.current_rpc}`"
-            )
-        except Exception as e:
-            logging.error(f"Failed to send error notification: {e}")
-    
-    return None
+        if hasattr(tx_result, 'tx_digest'):
+            return tx_result.tx_digest
+        else:
+            logging.error(f"❌ Lỗi trả về tx_result: {tx_result}")
+            return None
 
-@tasks.loop(seconds=1)
+    except Exception as e:
+        logging.error(f"❌ Lỗi khi rút từ {safe_address(from_addr)}: {e}")
+        return None
+
+@tasks.loop(seconds=5)
 async def monitor_wallets():
     for wallet in WATCHED:
         addr = wallet["address"]
         try:
-            balance = await get_sui_balance(addr)
-            if balance < 0:  # Skip if error
-                continue
-                
-            last_balance = last_balances.get(addr, -1)
+            balance = get_sui_balance(addr)
+            prev_balance = last_balances.get(addr, -1)
 
-            # Notify balance changes
-            if balance != last_balance and last_balance != -1:
-                change = balance - last_balance
-                emoji = "🔼" if change > 0 else "🔽"
-                message = (
+            # Thông báo thay đổi số dư
+            if balance != prev_balance and prev_balance != -1:
+                emoji = "🔼" if balance > prev_balance else "🔽"
+                change = balance - prev_balance
+                msg = (
                     f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
-                    f"{emoji} Balance: `{balance:.6f} SUI` ({'↑' if change > 0 else '↓'} {abs(change):.6f})\n"
-                    f"• RPC: `{sui_manager.current_rpc}`"
+                    f"{emoji} Số dư: `{balance:.6f} SUI` ({'+' if change > 0 else ''}{change:.6f})"
                 )
-                try:
-                    await bot.get_channel(CHANNEL_ID).send(message)
-                except Exception as e:
-                    logging.error(f"Balance notification error: {e}")
+                await bot.get_channel(CHANNEL_ID).send(msg)
 
             last_balances[addr] = balance
 
-            # Auto-withdraw if enabled
-            if wallet.get("withdraw", False) and balance > 0.001:
-                await withdraw_sui(addr)
-                
+            # Rút SUI nếu được phép và số dư > 0
+            if wallet.get("withdraw", False) and balance > 0:
+                tx_hash = await withdraw_sui(addr)
+                if tx_hash:
+                    await bot.get_channel(CHANNEL_ID).send(
+                        f"💸 **Đã rút tự động**\n"
+                        f"Ví: {wallet.get('name', safe_address(addr))}\n"
+                        f"Số tiền: `{balance:.6f} SUI`\n"
+                        f"TX: `{tx_hash}`"
+                    )
         except Exception as e:
-            logging.error(f"Error processing wallet {safe_address(addr)}: {e}")
+            logging.error(f"Lỗi khi xử lý ví {safe_address(addr)}: {e}")
 
-# === Web Server for Railway ===
+# === Web Server for Railway/Render keepalive ===
 async def health_check(request):
-    return web.Response(text=f"🟢 Bot running | Tracking {len(WATCHED)} wallets | RPC: {sui_manager.current_rpc}")
+    return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví")
 
 async def start_web_server():
     app = web.Application()
@@ -232,19 +160,16 @@ async def start_web_server():
 
 @bot.event
 async def on_ready():
-    logging.info(f"Discord bot ready: {bot.user.name}")
+    logging.info(f"Bot Discord đã sẵn sàng: {bot.user.name}")
     try:
-        channel = bot.get_channel(CHANNEL_ID)
-        await channel.send(
-            f"🚀 **SUI Monitor Started**\n"
-            f"• Tracking {len(WATCHED)} wallets (1s interval)\n"
-            f"• Current RPC: `{sui_manager.current_rpc}`\n"
-            f"• Main wallet: `{safe_address(str(sui_manager.client.config.active_address))}`\n"
-            f"• Target wallet: `{safe_address(TARGET_ADDRESS)}`"
+        await bot.get_channel(CHANNEL_ID).send(
+            f"🚀 **Bot SUI Monitor đã khởi động**\n"
+            f"• Theo dõi {len(WATCHED)} ví (5s/kiểm tra)\n"
+            f"• RPC: `{RPC_URL}`\n"
+            f"• Ví chủ: `{safe_address(withdraw_signer)}`"
         )
     except Exception as e:
-        logging.error(f"Startup message error: {e}")
-    
+        logging.error(f"Lỗi gửi tin nhắn khởi động: {e}")
     monitor_wallets.start()
     await start_web_server()
 
