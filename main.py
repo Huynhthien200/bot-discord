@@ -60,7 +60,7 @@ def get_sui_balance(addr: str) -> float:
     """Lấy số dư SUI (SUI) bằng get_gas"""
     try:
         res = client.get_gas(address=addr)
-        coins = res.data if hasattr(res, "data") else res
+        coins = getattr(res, "data", []) or []
         return sum(int(c.balance) / 1_000_000_000 for c in coins)
     except Exception as e:
         logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
