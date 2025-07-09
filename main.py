@@ -22,7 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))  # đồng bộ với biến môi trường bạn dùng
+INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
@@ -61,10 +61,9 @@ def safe_address(addr: str) -> str:
 
 def get_sui_balance(addr: str) -> float:
     try:
-        res = client.get_gas(address=addr)
-        if not hasattr(res, "data") or not res.data:
-            return 0.0
-        return sum(int(obj.balance) for obj in res.data) / 1_000_000_000
+        res = client.get_balance(address=addr)
+        # pysui 0.54.0: trả về object có .totalBalance (Mist)
+        return int(res.totalBalance) / 1_000_000_000
     except Exception as e:
         logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
         return 0.0
