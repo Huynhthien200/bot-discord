@@ -1,5 +1,4 @@
-aiohttp==3.9.5
-httpx
 bech32==1.2.0
 pysui==0.54.0
 discord.py==2.3.2
+aiohttp==3.9.5
