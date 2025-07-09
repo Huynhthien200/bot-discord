@@ -45,6 +45,7 @@ try:
     client = SyncClient(cfg)
     withdraw_signer = str(cfg.active_address)
     logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
+    print("Client class:", client.__class__)  # Kiểm tra đúng là SyncClient
 except Exception as e:
     logging.critical(f"Lỗi kết nối SUI: {e}")
     raise
@@ -62,7 +63,6 @@ def safe_address(addr: str) -> str:
 def get_sui_balance(addr: str) -> float:
     try:
         res = client.get_balance(address=addr)
-        # pysui 0.54.0: trả về object có .totalBalance (Mist)
         return int(res.totalBalance) / 1_000_000_000
     except Exception as e:
         logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
