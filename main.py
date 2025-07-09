@@ -5,6 +5,14 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 import base64
+import pysui
+print("pysui version:", pysui.__version__)
+
+try:
+    from pysui import SyncClient, SuiConfig
+    print("Đã import SyncClient và SuiConfig thành công!")
+except Exception as e:
+    print("Import SyncClient/SuiConfig lỗi:", e)
 
 # --- Convert suiprivkey1... sang base64 nếu cần ---
 def suiprivkey_to_base64(suipriv: str) -> str:
