@@ -1,28 +1,31 @@
 import os
 import json
-import time
 import requests
 import asyncio
 import discord
 
-# --- ENV ---
+# === ENVIRONMENT ===
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 
 if not all([DISCORD_TOKEN, CHANNEL_ID]):
-    raise RuntimeError("❌ Thiếu biến môi trường!")
+    raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
 
-# --- Load watched.json ---
-with open("watched.json", "r") as f:
-    WATCHED = json.load(f)
+# === LOAD WATCHED WALLETS ===
+try:
+    with open("watched.json", "r") as f:
+        WATCHED = json.load(f)
+except Exception as e:
+    print(f"Lỗi đọc watched.json: {e}")
+    WATCHED = []
 
-# --- Discord Bot ---
+# === DISCORD BOT ===
 intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-# --- Hàm lấy số dư ---
+# === HÀM LẤY SỐ DƯ SUI ===
 def get_sui_balance(address):
     payload = {
         "jsonrpc": "2.0",
@@ -38,9 +41,10 @@ def get_sui_balance(address):
         print(f"Lỗi khi kiểm tra số dư {address[:8]}...: {e}")
     return 0.0
 
-# --- Lưu số dư lần trước ---
+# === BIẾN LƯU TRẠNG THÁI SỐ DƯ CŨ ===
 last_balances = {}
 
+# === HÀM GỬI THÔNG BÁO DISCORD ===
 async def send_discord(msg):
     await bot.wait_until_ready()
     channel = bot.get_channel(CHANNEL_ID)
@@ -49,6 +53,7 @@ async def send_discord(msg):
     else:
         print("❌ Không tìm thấy kênh Discord!")
 
+# === MONITOR LOOP ===
 async def monitor_loop():
     await bot.wait_until_ready()
     global last_balances
@@ -58,6 +63,8 @@ async def monitor_loop():
         addr = w["address"]
         last_balances[addr] = get_sui_balance(addr)
     await asyncio.sleep(1)
+
+    print("Bắt đầu theo dõi các ví:", [w.get("name", w["address"][:8]) for w in WATCHED])
 
     while True:
         for w in WATCHED:
@@ -77,7 +84,7 @@ async def monitor_loop():
 
 @bot.event
 async def on_ready():
-    print(f"Bot đã sẵn sàng! Đang theo dõi: {[w['name'] for w in WATCHED]}")
+    print(f"Bot đã sẵn sàng! Đang theo dõi: {[w.get('name', w['address'][:8]) for w in WATCHED]}")
     bot.loop.create_task(monitor_loop())
 
 if __name__ == "__main__":
