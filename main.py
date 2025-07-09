@@ -5,7 +5,6 @@ import discord
 from discord.ext import commands, tasks
 from aiohttp import web
 import base64
-from pysui import SuiConfig, SyncClient
 
 # --- Convert suiprivkey1... sang base64 nếu cần ---
 def suiprivkey_to_base64(suipriv: str) -> str:
@@ -45,6 +44,7 @@ except Exception as e:
     WATCHED = []
 
 # --- SUI ---
+from pysui import SuiConfig, SyncClient
 try:
     cfg = SuiConfig.user_config(
         prv_keys=[SUI_PRIVATE_KEY],
@@ -53,7 +53,13 @@ try:
     client = SyncClient(cfg)
     withdraw_signer = str(cfg.active_address)
     logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
-    print("Client class:", client.__class__)  # Kiểm tra đúng là SyncClient
+
+    # DEBUG: In class và các method có trong client
+    print("Client class:", client.__class__)
+    print("Các method trong client:")
+    for m in dir(client):
+        if not m.startswith('_'):
+            print(m)
 except Exception as e:
     logging.critical(f"Lỗi kết nối SUI: {e}")
     raise
