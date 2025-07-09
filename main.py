@@ -1,7 +1,6 @@
 import os
 import json
 import logging
-import asyncio
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
@@ -23,7 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-INTERVAL = int(os.getenv("CHECK_INTERVAL", "1"))
+INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))  # Đổi CHECK_INTERVAL thành POLL_INTERVAL
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
