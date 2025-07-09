@@ -1,3 +1,3 @@
-git+https://github.com/sui-python/suipy.git
+requests
 discord.py
 aiohttp
