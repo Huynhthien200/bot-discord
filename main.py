@@ -28,6 +28,9 @@ INTERVAL = int(os.getenv("CHECK_INTERVAL", "1"))  # giây
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
 
+if CHANNEL_ID == 0:
+    raise ValueError("❌ Biến môi trường DISCORD_CHANNEL_ID chưa được cấu hình hoặc sai!")
+
 # --- Ví theo dõi ---
 try:
     with open("watched.json", "r") as f:
@@ -61,10 +64,8 @@ def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
 
 def get_sui_balance(addr: str) -> float:
-    """Lấy số dư SUI (Mist -> SUI) cho ví addr."""
     try:
         res = client.get_gas(address=addr)
-        # res.data là list các object, mỗi object có .balance
         if not hasattr(res, "data") or not res.data:
             return 0.0
         return sum(int(obj.balance) for obj in res.data) / 1_000_000_000
@@ -73,7 +74,6 @@ def get_sui_balance(addr: str) -> float:
         return 0.0
 
 async def withdraw_sui(from_addr: str, value: float) -> str | None:
-    """Rút toàn bộ SUI về ví mục tiêu (value = SUI). Chỉ rút từ ví chủ."""
     if from_addr != withdraw_signer:
         logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
         return None
@@ -82,8 +82,6 @@ async def withdraw_sui(from_addr: str, value: float) -> str | None:
         if not hasattr(gas_objs, "data") or not gas_objs.data:
             logging.warning(f"⚠️ Không tìm thấy Gas Object cho {safe_address(from_addr)}")
             return None
-
-        # Trừ 0.001 SUI làm phí (tùy tình trạng, có thể giảm nếu cần)
         amount = int((value - 0.001) * 1_000_000_000)
         if amount <= 0:
             return None
@@ -107,7 +105,6 @@ async def monitor_wallets():
             balance = get_sui_balance(addr)
             prev = last_balances.get(addr, -1)
             if balance != prev and prev != -1:
-                # Gửi thông báo số dư thay đổi
                 emoji = "🔼" if balance > prev else "🔽"
                 await send_discord(
                     f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
@@ -115,8 +112,7 @@ async def monitor_wallets():
                 )
             last_balances[addr] = balance
 
-            # Tự động rút nếu cần
-            if wallet.get("withdraw", False) and balance > 0.01:  # > 0.01 để tránh rút phí nhỏ
+            if wallet.get("withdraw", False) and balance > 0.01:
                 tx = await withdraw_sui(addr, balance)
                 if tx:
                     await send_discord(
@@ -137,7 +133,10 @@ async def send_discord(msg: str):
             for c in guild.text_channels:
                 logging.info(f" - {c.name} ({c.id})")
         return
-    await channel.send(msg)
+    try:
+        await channel.send(msg)
+    except Exception as e:
+        logging.error(f"❌ Lỗi khi gửi tin nhắn Discord: {e}")
 
 # --- Web server cho Railway ---
 async def health_check(request):
@@ -153,6 +152,7 @@ async def start_web_server():
 
 @bot.event
 async def on_ready():
+    await asyncio.sleep(2)  # delay để chắc chắn Discord đã sẵn sàng
     logging.info(f"Bot Discord đã sẵn sàng: {bot.user.name}")
     await send_discord(
         f"🚀 **Bot SUI Monitor đã khởi động**\n"
