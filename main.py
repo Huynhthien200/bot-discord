@@ -22,7 +22,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))  # Đổi CHECK_INTERVAL thành POLL_INTERVAL
+INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))  # đồng bộ với biến môi trường bạn dùng
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
@@ -71,7 +71,7 @@ def get_sui_balance(addr: str) -> float:
 
 async def withdraw_sui(from_addr: str, value: float) -> str | None:
     if from_addr != withdraw_signer:
-        logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)}")
+        logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)} (chỉ ví chủ được phép rút)")
         return None
     try:
         gas_objs = client.get_gas(address=from_addr)
@@ -101,6 +101,8 @@ async def monitor_wallets():
         try:
             balance = get_sui_balance(addr)
             prev = last_balances.get(addr, -1)
+            logging.info(f"[DEBUG] {wallet.get('name', 'Unnamed')} ({safe_address(addr)}): Current={balance:.6f} SUI | Prev={prev:.6f}")
+
             if prev != -1 and abs(balance - prev) > 1e-9:
                 emoji = "🔼" if balance > prev else "🔽"
                 diff = balance - prev
@@ -112,7 +114,8 @@ async def monitor_wallets():
                 )
             last_balances[addr] = balance
 
-            if wallet.get("withdraw", False) and balance > 0.01:
+            # Chỉ tự động rút tiền nếu ví này có cờ withdraw true **và** là ví chủ
+            if wallet.get("withdraw", False) and addr == withdraw_signer and balance > 0.01:
                 tx = await withdraw_sui(addr, balance)
                 if tx:
                     await send_discord(
