@@ -23,13 +23,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-INTERVAL = int(os.getenv("CHECK_INTERVAL", "1"))  # giây
+INTERVAL = int(os.getenv("CHECK_INTERVAL", "1"))
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
-
-if CHANNEL_ID == 0:
-    raise ValueError("❌ Biến môi trường DISCORD_CHANNEL_ID chưa được cấu hình hoặc sai!")
 
 # --- Ví theo dõi ---
 try:
@@ -58,7 +55,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-last_balances = {}  # addr -> balance
+last_balances = {}
 
 def safe_address(addr: str) -> str:
     return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
@@ -82,6 +79,7 @@ async def withdraw_sui(from_addr: str, value: float) -> str | None:
         if not hasattr(gas_objs, "data") or not gas_objs.data:
             logging.warning(f"⚠️ Không tìm thấy Gas Object cho {safe_address(from_addr)}")
             return None
+
         amount = int((value - 0.001) * 1_000_000_000)
         if amount <= 0:
             return None
@@ -104,11 +102,14 @@ async def monitor_wallets():
         try:
             balance = get_sui_balance(addr)
             prev = last_balances.get(addr, -1)
-            if balance != prev and prev != -1:
+            if prev != -1 and abs(balance - prev) > 1e-9:
                 emoji = "🔼" if balance > prev else "🔽"
+                diff = balance - prev
                 await send_discord(
-                    f"**{wallet.get('name', 'Unnamed')}** ({safe_address(addr)})\n"
-                    f"{emoji} Số dư: `{balance:.6f} SUI` ({'+' if balance-prev>0 else ''}{balance-prev:.6f})"
+                    f"🔔 **Số dư thay đổi!**\n"
+                    f"Ví: **{wallet.get('name', 'Unnamed')}**\n"
+                    f"Địa chỉ: `{safe_address(addr)}`\n"
+                    f"{emoji} Số dư mới: `{balance:.6f} SUI` ({'+' if diff>0 else ''}{diff:.6f})"
                 )
             last_balances[addr] = balance
 
@@ -133,12 +134,8 @@ async def send_discord(msg: str):
             for c in guild.text_channels:
                 logging.info(f" - {c.name} ({c.id})")
         return
-    try:
-        await channel.send(msg)
-    except Exception as e:
-        logging.error(f"❌ Lỗi khi gửi tin nhắn Discord: {e}")
+    await channel.send(msg)
 
-# --- Web server cho Railway ---
 async def health_check(request):
     return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví")
 
@@ -152,7 +149,6 @@ async def start_web_server():
 
 @bot.event
 async def on_ready():
-    await asyncio.sleep(2)  # delay để chắc chắn Discord đã sẵn sàng
     logging.info(f"Bot Discord đã sẵn sàng: {bot.user.name}")
     await send_discord(
         f"🚀 **Bot SUI Monitor đã khởi động**\n"
