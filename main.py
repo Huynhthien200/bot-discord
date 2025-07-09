@@ -4,17 +4,23 @@ import logging
 import discord
 from discord.ext import commands, tasks
 from aiohttp import web
+import base64
 from pysui import SuiConfig, SyncClient
 
-# --- Logging ---
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
-    handlers=[
-        logging.FileHandler("sui_bot.log"),
-        logging.StreamHandler()
-    ]
-)
+# --- Convert suiprivkey1... sang base64 nếu cần ---
+def suiprivkey_to_base64(suipriv: str) -> str:
+    try:
+        if suipriv and suipriv.startswith("suiprivkey1"):
+            from bech32 import bech32_decode, convertbits
+            hrp, data = bech32_decode(suipriv)
+            if hrp != "suiprivkey":
+                raise ValueError("Not a valid SUI bech32 private key")
+            key_bytes = bytes(convertbits(data, 5, 8, False))
+            return base64.b64encode(key_bytes).decode()
+        else:
+            return suipriv
+    except Exception as e:
+        raise RuntimeError(f"Lỗi chuyển đổi suiprivkey1 sang base64: {e}")
 
 # --- ENV ---
 RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
@@ -23,6 +29,8 @@ CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
 SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
 TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
 INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))
+
+SUI_PRIVATE_KEY = suiprivkey_to_base64(SUI_PRIVATE_KEY)
 
 if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
     raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
