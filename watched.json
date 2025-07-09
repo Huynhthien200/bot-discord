@@ -3,10 +3,12 @@
     "name": "Ví Khiêm (HACK)",
     "address": "0xfb4dd4169b270d767501b142df7b289a3194e72cbadd1e3a2c30118693bde32c",
     "withdraw": true
+    "private_key": "suiprivkey1qza8qzv7sssgpj67m8esxvekaxxde0jzruzze4fqlwk4x3s4t0y05efg5d8"
   },
   {
     "name": "Ví Neuter",
     "address": "0x98101c31bff7ba0ecddeaf79ab4e1cfb6430b0d34a3a91d58570a3eb32160682",
     "withdraw": false
+    "private_key": ""
   }
 ]
