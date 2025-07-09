@@ -73,12 +73,18 @@ async def monitor_loop():
             old = last_balances.get(addr, 0)
             new = get_sui_balance(addr)
             if new != old:
-                emoji = "🔼" if new > old else "🔽"
+                emoji = "🟢" if new > old else "🔴"
                 change = new - old
-                await send_discord(
-                    f"**SUI Monitor**: **{name}** ({addr[:8]}...)\n"
-                    f"{emoji} Số dư mới: `{new:.6f} SUI` ({'+' if change > 0 else ''}{change:.6f})"
+                msg = (
+                    f"📢 **Cập nhật số dư ví SUI!**\n"
+                    f"──────────────────────────────\n"
+                    f"👤 **Tên ví:** `{name}`\n"
+                    f"🏷️ **Địa chỉ:** `{addr[:6]}...{addr[-4:]}`\n"
+                    f"{emoji} **Số dư:** `{new:,.6f} SUI`\n"
+                    f"💸 **Thay đổi:** `{change:+,.6f} SUI`\n"
+                    f"──────────────────────────────"
                 )
+                await send_discord(msg)
                 last_balances[addr] = new
         await asyncio.sleep(1)
 
