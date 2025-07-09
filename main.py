@@ -3,184 +3,98 @@ import json
 import logging
 import discord
 from discord.ext import commands, tasks
-from aiohttp import web
-import base64
-import pysui
-print("pysui version:", pysui.__version__)
+from suipy import SuiWallet
 
-try:
-    from pysui import SyncClient, SuiConfig
-    print("Đã import SyncClient và SuiConfig thành công!")
-except Exception as e:
-    print("Import SyncClient/SuiConfig lỗi:", e)
-
-# --- Convert suiprivkey1... sang base64 nếu cần ---
-def suiprivkey_to_base64(suipriv: str) -> str:
-    try:
-        if suipriv and suipriv.startswith("suiprivkey1"):
-            from bech32 import bech32_decode, convertbits
-            hrp, data = bech32_decode(suipriv)
-            if hrp != "suiprivkey":
-                raise ValueError("Not a valid SUI bech32 private key")
-            key_bytes = bytes(convertbits(data, 5, 8, False))
-            return base64.b64encode(key_bytes).decode()
-        else:
-            return suipriv
-    except Exception as e:
-        raise RuntimeError(f"Lỗi chuyển đổi suiprivkey1 sang base64: {e}")
+# --- Logging ---
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
 # --- ENV ---
-RPC_URL = os.getenv("RPC_URL", "https://rpc-mainnet.suiscan.xyz/")
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 CHANNEL_ID = int(os.getenv("DISCORD_CHANNEL_ID", "0"))
-SUI_PRIVATE_KEY = os.getenv("SUI_PRIVATE_KEY")
-TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
-INTERVAL = int(os.getenv("POLL_INTERVAL", "1"))
+SUI_TARGET_ADDRESS = os.getenv("SUI_TARGET_ADDRESS")
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "1"))  # giây
 
-SUI_PRIVATE_KEY = suiprivkey_to_base64(SUI_PRIVATE_KEY)
+if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_TARGET_ADDRESS]):
+    raise RuntimeError("❌ Missing environment variables!")
 
-if not all([DISCORD_TOKEN, CHANNEL_ID, SUI_PRIVATE_KEY, TARGET_ADDRESS]):
-    raise RuntimeError("❌ Thiếu biến môi trường cần thiết!")
+# --- Load watched.json ---
+with open("watched.json", "r") as f:
+    WATCHED = json.load(f)
 
-# --- Ví theo dõi ---
-try:
-    with open("watched.json", "r") as f:
-        WATCHED = json.load(f)
-    logging.info(f"Đã tải {len(WATCHED)} ví từ watched.json")
-except Exception as e:
-    logging.error(f"Lỗi đọc watched.json: {e}")
-    WATCHED = []
-
-# --- SUI ---
-from pysui import SuiConfig, SyncClient
-try:
-    cfg = SuiConfig.user_config(
-        prv_keys=[SUI_PRIVATE_KEY],
-        rpc_url=RPC_URL
-    )
-    client = SyncClient(cfg)
-    withdraw_signer = str(cfg.active_address)
-    logging.info(f"Kết nối SUI thành công! Địa chỉ ví: {withdraw_signer[:10]}...")
-
-    # DEBUG: In class và các method có trong client
-    print("Client class:", client.__class__)
-    print("Các method trong client:")
-    for m in dir(client):
-        if not m.startswith('_'):
-            print(m)
-except Exception as e:
-    logging.critical(f"Lỗi kết nối SUI: {e}")
-    raise
+# --- Prepare wallets (key: address, value: SuiWallet) ---
+WALLETS = {}
+for w in WATCHED:
+    if "private_key" in w and w["private_key"]:
+        wallet = SuiWallet.from_private_key(w["private_key"])
+        WALLETS[w["address"]] = wallet
+    else:
+        logging.error(f"Ví {w.get('name', w['address'])} thiếu private_key, sẽ bỏ qua.")
 
 # --- Discord Bot ---
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+# --- Trạng thái số dư cũ
 last_balances = {}
 
-def safe_address(addr: str) -> str:
-    return f"{addr[:6]}...{addr[-4:]}" if addr else "unknown"
+async def send_discord(msg: str):
+    await bot.wait_until_ready()
+    channel = bot.get_channel(CHANNEL_ID)
+    if channel:
+        await channel.send(msg)
+    else:
+        logging.error("Không tìm thấy kênh Discord!")
 
-def get_sui_balance(addr: str) -> float:
-    try:
-        res = client.get_balance(address=addr)
-        return int(res.totalBalance) / 1_000_000_000
-    except Exception as e:
-        logging.error(f"Lỗi khi kiểm tra số dư {safe_address(addr)}: {e}")
-        return 0.0
-
-async def withdraw_sui(from_addr: str, value: float) -> str | None:
-    if from_addr != withdraw_signer:
-        logging.warning(f"⚠️ Không thể rút từ ví {safe_address(from_addr)} (chỉ ví chủ được phép rút)")
-        return None
-    try:
-        gas_objs = client.get_gas(address=from_addr)
-        if not hasattr(gas_objs, "data") or not gas_objs.data:
-            logging.warning(f"⚠️ Không tìm thấy Gas Object cho {safe_address(from_addr)}")
-            return None
-
-        amount = int((value - 0.001) * 1_000_000_000)
-        if amount <= 0:
-            return None
-        result = client.transfer(
-            signer=from_addr,
-            recipient=TARGET_ADDRESS,
-            amount=amount,
-            gas_object=gas_objs.data[0].object_id
-        )
-        if hasattr(result, "tx_digest"):
-            return result.tx_digest
-    except Exception as e:
-        logging.error(f"❌ Lỗi khi rút tiền: {e}")
-    return None
-
-@tasks.loop(seconds=INTERVAL)
+@tasks.loop(seconds=CHECK_INTERVAL)
 async def monitor_wallets():
-    for wallet in WATCHED:
-        addr = wallet["address"]
+    for w in WATCHED:
+        address = w["address"]
+        name = w.get("name", address[:8])
+        wallet = WALLETS.get(address)
+
+        if not wallet:
+            continue  # Bỏ qua ví không có private_key hợp lệ
+
         try:
-            balance = get_sui_balance(addr)
-            prev = last_balances.get(addr, -1)
-            logging.info(f"[DEBUG] {wallet.get('name', 'Unnamed')} ({safe_address(addr)}): Current={balance:.6f} SUI | Prev={prev:.6f}")
-
-            if prev != -1 and abs(balance - prev) > 1e-9:
-                emoji = "🔼" if balance > prev else "🔽"
-                diff = balance - prev
+            # Check balance
+            balance = wallet.get_sui_balance()
+            prev_balance = last_balances.get(address, None)
+            if prev_balance is not None and balance != prev_balance:
+                emoji = "🔼" if balance > prev_balance else "🔽"
+                chg = balance - prev_balance
                 await send_discord(
-                    f"🔔 **Số dư thay đổi!**\n"
-                    f"Ví: **{wallet.get('name', 'Unnamed')}**\n"
-                    f"Địa chỉ: `{safe_address(addr)}`\n"
-                    f"{emoji} Số dư mới: `{balance:.6f} SUI` ({'+' if diff>0 else ''}{diff:.6f})"
+                    f"**{name}** ({address[:8]}...)\n"
+                    f"{emoji} Số dư: `{balance:.6f} SUI` ({'+' if chg>0 else ''}{chg:.6f})"
                 )
-            last_balances[addr] = balance
+            last_balances[address] = balance
 
-            # Chỉ tự động rút tiền nếu ví này có cờ withdraw true **và** là ví chủ
-            if wallet.get("withdraw", False) and addr == withdraw_signer and balance > 0.01:
-                tx = await withdraw_sui(addr, balance)
-                if tx:
+            # Tự động rút nếu có cờ withdraw và có tiền > 0.01 SUI
+            if w.get("withdraw", False) and balance > 0.01:
+                amount = balance - 0.01
+                try:
+                    tx_digest = wallet.transfer_sui(to_address=SUI_TARGET_ADDRESS, amount=amount)
                     await send_discord(
                         f"💸 **Đã rút tự động**\n"
-                        f"Ví: {wallet.get('name', safe_address(addr))}\n"
-                        f"Số tiền: `{balance:.6f} SUI`\n"
-                        f"TX: `{tx}`"
+                        f"Ví: {name}\n"
+                        f"Số tiền: `{amount:.6f} SUI`\n"
+                        f"TX: `{tx_digest}`"
+                    )
+                except Exception as e:
+                    await send_discord(
+                        f"❌ **Rút tiền thất bại cho ví {name} ({address[:8]}...)**\nLỗi: {e}"
                     )
         except Exception as e:
-            logging.error(f"Lỗi khi xử lý ví {safe_address(addr)}: {e}")
-
-async def send_discord(msg: str):
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel is None:
-        logging.error("❌ Không tìm thấy kênh hoặc chưa cấp quyền cho bot!")
-        for guild in bot.guilds:
-            logging.info(f"Bot đang trong server: {guild.name}")
-            for c in guild.text_channels:
-                logging.info(f" - {c.name} ({c.id})")
-        return
-    await channel.send(msg)
-
-async def health_check(request):
-    return web.Response(text=f"🟢 Bot đang chạy | Theo dõi {len(WATCHED)} ví")
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", int(os.getenv("PORT", "8080")))
-    await site.start()
+            logging.error(f"Lỗi với ví {address[:8]}...: {e}")
 
 @bot.event
 async def on_ready():
-    logging.info(f"Bot Discord đã sẵn sàng: {bot.user.name}")
-    await send_discord(
-        f"🚀 **Bot SUI Monitor đã khởi động**\n"
-        f"• Theo dõi {len(WATCHED)} ví ({INTERVAL}s/kiểm tra)\n"
-        f"• RPC: `{RPC_URL}`\n"
-        f"• Ví chủ: `{safe_address(withdraw_signer)}`"
-    )
+    logging.info("Bot đã sẵn sàng!")
+    await send_discord(f"🚀 **Bot SUI Monitor đã khởi động, check mỗi {CHECK_INTERVAL}s**")
     monitor_wallets.start()
-    await start_web_server()
 
 if __name__ == "__main__":
     bot.run(DISCORD_TOKEN)
