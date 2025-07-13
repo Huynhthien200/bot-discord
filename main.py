@@ -36,33 +36,7 @@ def get_sui_balance(address):
     try:
         r = requests.post(RPC_URL, json=payload, timeout=20).json()
         if "result" in r and "totalBalance" in r["result"]:
-            return int(r["result"]["totalBalance"]) / 1_000_000_000
-    except Exception as e:
-        print(f"Lỗi khi kiểm tra số dư {address[:8]}...: {e}")
-    return 0.0
-
-# === BIẾN LƯU TRẠNG THÁI SỐ DƯ CŨ ===
-last_balances = {}
-
-# === HÀM GỬI THÔNG BÁO DISCORD ===
-async def send_discord(msg):
-    await bot.wait_until_ready()
-    channel = bot.get_channel(CHANNEL_ID)
-    if channel:
-        await channel.send(msg)
-    else:
-        print("❌ Không tìm thấy kênh Discord!")
-
-# === MONITOR LOOP ===
-async def monitor_loop():
-    await bot.wait_until_ready()
-    global last_balances
-
-    # Khởi tạo số dư lần đầu
-    for w in WATCHED:
-        addr = w["address"]
-        last_balances[addr] = get_sui_balance(addr)
-    await asyncio.sleep(1)
+            return int(r["resu60)
 
     print("Bắt đầu theo dõi các ví:", [w.get("name", w["address"][:8]) for w in WATCHED])
 
