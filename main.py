@@ -34,7 +34,7 @@ def get_sui_balance(address):
         "params": [address, "0x2::sui::SUI"]
     }
     try:
-        r = requests.post(RPC_URL, json=payload, timeout=10).json()
+        r = requests.post(RPC_URL, json=payload, timeout=20).json()
         if "result" in r and "totalBalance" in r["result"]:
             return int(r["result"]["totalBalance"]) / 1_000_000_000
     except Exception as e:
