@@ -86,7 +86,7 @@ async def monitor_loop():
                 )
                 await send_discord(msg)
                 last_balances[addr] = new
-        await asyncio.sleep(1)
+        await asyncio.sleep(60)
 
 @bot.event
 async def on_ready():
