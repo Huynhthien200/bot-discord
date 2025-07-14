@@ -25,7 +25,7 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = discord.Client(intents=intents)
 
-# === HÀM LẤY SỐ DƯ SUI ===
+# === HÀM LẤY SỐ DƯ SUI (CÓ XỬ LÝ LỖI RPC) ===
 def get_sui_balance(address):
     payload = {
         "jsonrpc": "2.0",
@@ -34,12 +34,15 @@ def get_sui_balance(address):
         "params": [address, "0x2::sui::SUI"]
     }
     try:
-        r = requests.post(RPC_URL, json=payload, timeout=20).json()
-        if "result" in r and "totalBalance" in r["result"]:
-            return int(r["result"]["totalBalance"]) / 1_000_000_000
+        r = requests.post(RPC_URL, json=payload, timeout=3).json()
+        balance = r.get("result", {}).get("totalBalance", None)
+        if balance is not None:
+            return int(balance) / 1_000_000_000
+        else:
+            print(f"⚠️ RPC không trả về totalBalance cho {address[:8]}..., response: {r}")
     except Exception as e:
-        print(f"Lỗi khi kiểm tra số dư {address[:8]}...: {e}")
-    return 0.0
+        print(f"❌ Lỗi khi kiểm tra số dư {address[:8]}...: {e}")
+    return None  # Lỗi thật sự → trả về None
 
 # === BIẾN LƯU TRẠNG THÁI SỐ DƯ CŨ ===
 last_balances = {}
@@ -58,20 +61,37 @@ async def monitor_loop():
     await bot.wait_until_ready()
     global last_balances
 
-    # Khởi tạo số dư lần đầu
+    # Khởi tạo số dư ban đầu
     for w in WATCHED:
         addr = w["address"]
-        last_balances[addr] = get_sui_balance(addr)
+        name = w.get("name", addr[:8])
+        balance = get_sui_balance(addr)
+        if balance is None:
+            print(f"⚠️ Không lấy được số dư ví `{name}` ban đầu, sẽ thử lại sau.")
+        last_balances[addr] = balance  # Có thể là None
     await asyncio.sleep(1)
 
-    print("Bắt đầu theo dõi các ví:", [w.get("name", w["address"][:8]) for w in WATCHED])
+    print("✅ Bắt đầu theo dõi các ví:", [w.get("name", w["address"][:8]) for w in WATCHED])
 
+    # Vòng lặp theo dõi liên tục
     while True:
         for w in WATCHED:
             addr = w["address"]
             name = w.get("name", addr[:8])
-            old = last_balances.get(addr, 0)
+
+            old = last_balances.get(addr)
             new = get_sui_balance(addr)
+
+            if new is None:
+                print(f"⚠️ RPC lỗi cho ví `{name}`, bỏ qua lần này.")
+                continue
+
+            if old is None:
+                # Ghi nhận số dư lần đầu khi RPC thành công
+                last_balances[addr] = new
+                print(f"ℹ️ Đã khởi tạo số dư lần đầu cho ví `{name}`: {new:.6f} SUI")
+                continue
+
             if new != old:
                 emoji = "🟢" if new > old else "🔴"
                 change = new - old
@@ -85,12 +105,13 @@ async def monitor_loop():
                     f"──────────────────────────────"
                 )
                 await send_discord(msg)
-                last_balances[addr] = new
+
+            last_balances[addr] = new  # Cập nhật số dư
         await asyncio.sleep(1)
 
 @bot.event
 async def on_ready():
-    print(f"Bot đã sẵn sàng! Đang theo dõi: {[w.get('name', w['address'][:8]) for w in WATCHED]}")
+    print(f"🤖 Bot đã sẵn sàng! Đang theo dõi {len(WATCHED)} ví...")
     bot.loop.create_task(monitor_loop())
 
 if __name__ == "__main__":
